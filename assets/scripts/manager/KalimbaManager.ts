@@ -1,5 +1,5 @@
 import { _decorator, Component, Node, Prefab, instantiate, Vec3, UITransform, view } from 'cc';
-import { KalimbaKey } from './KalimbaKey';
+import { KalimbaKey } from '../KalimbaKey';
 import { AudioManager } from './AudioManager';
 const { ccclass, property } = _decorator;
 
@@ -18,13 +18,19 @@ export class KalimbaManager extends Component {
     keyWidth: number = 50;  // 琴键宽度，Windows下稍微加大
 
     @property
-    keyHeight: number = 250;  // 琴键高度，Windows下稍微加大
+    keyHeight: number = 200;  // 琴键基础高度
 
     @property
-    vShapeOffset: number = 15; // V形排列的每级高度偏移量
+    maxKeyHeight: number = 400;  // 琴键最大高度限制
 
     @property
-    bottomOffset: number = 50; // 最低琴键距离底部的距离
+    bottomPadding: number = 25;  // 最长琴键底部与屏幕底部的最小间距
+
+    @property
+    vShapeOffset: number = 5; // V形排列的每级高度偏移量
+
+    @property({ range: [0, 1, 0.01], slide: true })
+    keyCenterYPercent: number = 0.25; // 琴键区域中心点在屏幕的 Y 位置（0=底部, 1=顶部）
 
     private keys: Node[] = [];  // 存储所有琴键节点
     private audioManager: AudioManager = null;
@@ -58,50 +64,50 @@ export class KalimbaManager extends Component {
         const startX = -totalWidth / 2;
         const centerIndex = Math.floor(this.keyCount / 2);
         
-        // 计算基础 Y 坐标 (屏幕底部 + 偏移量 + 琴键一半高度)
-        // 坐标系原点在屏幕中心，所以底部是 -height/2
-        const bottomY = -visibleSize.height / 2 + this.bottomOffset + this.keyHeight / 2;
+        // 计算琴键区域中心的 Y 坐标（基于百分比，0=底部, 1=顶部）
+        const keyCenterY = -visibleSize.height / 2 + visibleSize.height * this.keyCenterYPercent;
+        
+        // 最长琴键（中间）的高度
+        const maxDist = Math.floor(this.keyCount / 2);
+        
+        // 计算基于配置的最大高度
+        let maxHeight = Math.min(this.keyHeight + (maxDist * this.vShapeOffset), this.maxKeyHeight);
+        
+        // 计算基于底部间距限制的最大高度：确保琴键底部不会超过屏幕底部 + bottomPadding
+        // 琴键底部 Y = keyCenterY - maxHeight/2
+        // 屏幕底部 Y = -visibleSize.height/2
+        // 需要：keyCenterY - maxHeight/2 >= -visibleSize.height/2 + bottomPadding
+        // 即：maxHeight <= 2 * (keyCenterY + visibleSize.height/2 - bottomPadding)
+        const maxHeightByBottom = 2 * (keyCenterY + visibleSize.height / 2 - this.bottomPadding);
+        maxHeight = Math.min(maxHeight, maxHeightByBottom);
+        
+        // 顶部对齐线 Y 坐标（最长琴键的中心在 keyCenterY，所以顶部 = 中心 + 高度/2）
+        const topY = keyCenterY + maxHeight / 2;
 
         // 创建琴键
         for (let i = 0; i < this.keyCount; i++) {
             const key = instantiate(this.keyPrefab);
             this.node.addChild(key);
 
-            // 计算 V 形布局
-            // 顶部对齐逻辑：
-            // 1. 基础高度是两边的最短高度
-            // 2. 中间最长，两边最短
-            // 3. 高度增量 = (中心距离最大值 - 当前距离) * vShapeOffset
-            
-            const maxDist = Math.floor(this.keyCount / 2); // 最大距离（边缘到中心的距离）
+            // 计算 V 形布局：中间最长，两边最短，顶部对齐
             const distFromCenter = Math.abs(i - centerIndex);
             
-            // 计算当前琴键的高度（中间最长）
-            // 越靠近中心，高度增加越多
+            // 计算当前琴键的高度（越靠近中心，高度越高）
+            // 使用相对比例来计算，确保所有琴键按相同比例缩放
             const heightIncrease = (maxDist - distFromCenter) * this.vShapeOffset;
-            const currentHeight = this.keyHeight + heightIncrease;
+            const rawHeight = this.keyHeight + heightIncrease;
+            const rawMaxHeight = this.keyHeight + (maxDist * this.vShapeOffset);
+            // 按比例缩放：当前高度 = maxHeight * (rawHeight / rawMaxHeight)
+            const currentHeight = maxHeight * (rawHeight / rawMaxHeight);
 
-            // 设置琴键大小
+            // 设置琴键大小和位置
             const uiTransform = key.getComponent(UITransform);
             if (uiTransform) {
                 uiTransform.width = this.keyWidth;
                 uiTransform.height = currentHeight;
                 
-                // 重新计算 Y 坐标，确保顶部对齐
-                // 假设我们希望所有琴键顶部在同一水平线上
-                // 这里我们以"最低的琴键底部"为基准反推
-                
-                // 最长琴键（中间）的底部位置
-                const centerKeyBottomY = -visibleSize.height / 2 + this.bottomOffset;
-                // 最长琴键的高度
-                const maxHeight = this.keyHeight + (maxDist * this.vShapeOffset);
-                // 顶部对齐线 Y 坐标
-                const topY = centerKeyBottomY + maxHeight;
-                
-                // 当前琴键的中心 Y 坐标 = 顶部线 - 当前高度的一半
+                // 当前琴键的中心 Y 坐标 = 顶部线 - 当前高度的一半（顶部对齐）
                 const y = topY - currentHeight / 2;
-                
-                // 计算 X 坐标
                 const x = startX + i * this.keySpacing;
                 
                 key.setPosition(new Vec3(x, y, 0));

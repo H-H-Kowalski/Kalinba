@@ -1,6 +1,6 @@
 import { _decorator, Component, Node, Button, Label, Sprite, Color, tween, Vec3, UIOpacity } from 'cc';
-import { RoundedRect } from './RoundedRect';
-import { SceneManager } from './SceneManager';
+import { RoundedRect } from '../RoundedRect';
+import { SceneManager } from '../manager/SceneManager';
 const { ccclass, property } = _decorator;
 
 @ccclass('HomeScene')

@@ -1,12 +1,16 @@
 import { _decorator, Component, Node, Button, Label, Slider } from 'cc';
-import { KalimbaManager } from './KalimbaManager';
-import { AudioManager } from './AudioManager';
+import { KalimbaManager } from '../manager/KalimbaManager';
+import { AudioManager } from '../manager/AudioManager';
+import { SheetMusicBackground } from './SheetMusicBackground';
 const { ccclass, property } = _decorator;
 
 @ccclass('GameScene')
 export class GameScene extends Component {
     @property(KalimbaManager)
     kalimbaManager: KalimbaManager = null;  // 卡林巴琴管理器
+
+    @property(SheetMusicBackground)
+    sheetMusicBackground: SheetMusicBackground = null;  // 顶部琴谱/背景图区域（可选）
 
     @property(Button)
     backButton: Button = null;  // 返回按钮
@@ -152,7 +156,7 @@ export class GameScene extends Component {
      */
     switchToHomeScene() {
         // 使用场景管理器切换场景
-        const sceneManager = require('./SceneManager').SceneManager.getInstance();
+        const sceneManager = require('../manager/SceneManager').SceneManager.getInstance();
         if (sceneManager) {
             sceneManager.loadHomeScene();
         } else {
@@ -177,6 +181,11 @@ export class GameScene extends Component {
     resetGame() {
         if (this.audioManager) {
             this.audioManager.stopAllSounds();
+        }
+
+        // 恢复琴谱区域为默认图
+        if (this.sheetMusicBackground) {
+            this.sheetMusicBackground.resetToDefault();
         }
         
         // 重置音量滑块
