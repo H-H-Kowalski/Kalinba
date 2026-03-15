@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, AudioSource, AudioClip, UITransform, Color, Sprite, tween, Vec3, Label } from 'cc';
+import { _decorator, Component, Node, AudioSource, AudioClip, UITransform, Color, Sprite, tween, Vec3, Label, instantiate } from 'cc';
 const { ccclass, property } = _decorator;
 
 @ccclass('KalimbaKey')
@@ -10,7 +10,10 @@ export class KalimbaKey extends Component {
     noteLabel: Label = null; // 显示音符的标签
 
     @property(Label)
-    dotLabel: Label = null; // 显示高音点的标签 (新增)
+    dotLabel: Label = null; // 显示高音点的标签
+
+    @property(Label)
+    dotLabel2: Label = null; // 第二个点（两个点时用，与 dotLabel 紧挨竖向排布）
 
     // 卡林巴琴简谱映射 (从左到右: D6 B5 G5 E5 C5 A4 F4 D4 C4 E4 G4 B4 D5 F5 A5 C6 E6)
     private static noteMap = [
@@ -44,6 +47,20 @@ export class KalimbaKey extends Component {
         if (!this.dotLabel) {
             const dotNode = this.node.getChildByName("DotLabel");
             if (dotNode) this.dotLabel = dotNode.getComponent(Label);
+        }
+        if (!this.dotLabel2) {
+            let dot2Node = this.node.getChildByName("DotLabel2");
+            if (!dot2Node && this.dotLabel) {
+                dot2Node = instantiate(this.dotLabel.node);
+                dot2Node.name = "DotLabel2";
+                this.node.addChild(dot2Node);
+                this.dotLabel2 = dot2Node.getComponent(Label);
+                const ui = dot2Node.getComponent(UITransform);
+                if (ui) ui.setAnchorPoint(0.5, 0);
+                if (this.dotLabel2) this.dotLabel2.color = this.dotLabel.color.clone();
+            } else if (dot2Node) {
+                this.dotLabel2 = dot2Node.getComponent(Label);
+            }
         }
         
         this.updateNoteDisplay();
@@ -92,10 +109,23 @@ export class KalimbaKey extends Component {
         if (this.keyIndex >= 0 && this.keyIndex < KalimbaKey.noteMap.length) {
             const noteInfo = KalimbaKey.noteMap[this.keyIndex];
             
-            // 如果配置了独立的 DotLabel，分开显示
+            // 如果配置了独立的 DotLabel，分开显示；两个点用两个 Label 紧挨竖排，无第二个 Label 时用冒号 ":" 替代
             if (this.dotLabel && this.noteLabel) {
-                this.dotLabel.string = noteInfo.dot;
                 this.noteLabel.string = noteInfo.num;
+                if (noteInfo.dot === '••') {
+                    if (this.dotLabel2) {
+                        this.dotLabel.string = '•';
+                        this.dotLabel2.string = '•';
+                        this.dotLabel2.node.active = true;
+                        const gap = 8;
+                        this.dotLabel2.node.setPosition(0, this.dotLabel.node.position.y + gap, 0);
+                    } else {
+                        this.dotLabel.string = ':';
+                    }
+                } else {
+                    this.dotLabel.string = noteInfo.dot;
+                    if (this.dotLabel2) this.dotLabel2.node.active = false;
+                }
             } 
             // 否则使用换行符兼容旧模式
             else if (this.noteLabel) {

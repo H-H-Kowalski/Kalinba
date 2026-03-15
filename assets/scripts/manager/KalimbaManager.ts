@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, Prefab, instantiate, Vec3, UITransform, view } from 'cc';
+import { _decorator, Component, Node, Prefab, instantiate, Vec3, UITransform, view, Label, Color } from 'cc';
 import { KalimbaKey } from '../KalimbaKey';
 import { AudioManager } from './AudioManager';
 const { ccclass, property } = _decorator;
@@ -25,6 +25,12 @@ export class KalimbaManager extends Component {
 
     @property
     bottomPadding: number = 25;  // 最长琴键底部与屏幕底部的最小间距
+
+    @property
+    labelBottomMargin: number = 16;  // 琴键 Label 距离琴键底部的间距（在编辑器里改 KalimbaManager 上的此属性才生效）
+
+    @property(Color)
+    labelColor: Color = new Color(55, 55, 60, 255);  // 琴键数字/点的颜色（深灰偏冷，比纯黑柔和）
 
     @property
     vShapeOffset: number = 5; // V形排列的每级高度偏移量
@@ -113,6 +119,9 @@ export class KalimbaManager extends Component {
                 key.setPosition(new Vec3(x, y, 0));
             }
 
+            // 将琴键上所有 Label 贴到底部，避免拉伸后文字与图片错位
+            this.layoutKeyLabelsToBottom(key, currentHeight);
+
             // 设置琴键编号并更新显示
             const kalimbaKey = key.getComponent(KalimbaKey);
             if (kalimbaKey) {
@@ -122,6 +131,40 @@ export class KalimbaManager extends Component {
             }
 
             this.keys.push(key);
+        }
+    }
+
+    /**
+     * 将琴键上所有 Label 子节点贴到琴键底部；DotLabel 紧挨数字上方约 3px
+     */
+    private layoutKeyLabelsToBottom(key: Node, keyHeight: number) {
+        const bottomY = -keyHeight / 2 + this.labelBottomMargin;
+        const dotGap = 3; // 点与数字的间距（px）
+        const labelNodes: { node: Node; ui: UITransform; label: Label; name: string }[] = [];
+        for (let i = 0; i < key.children.length; i++) {
+            const child = key.children[i];
+            const label = child.getComponent(Label);
+            if (!label) continue;
+            const ui = child.getComponent(UITransform);
+            if (!ui) continue;
+            labelNodes.push({ node: child, ui, label, name: child.name });
+        }
+        const noteEntry = labelNodes.find(t => t.name === 'NoteLabel');
+        const noteLabelHeight = noteEntry ? (noteEntry.label.lineHeight || noteEntry.ui.height || 20) : 20;
+        for (const { node, ui, label, name } of labelNodes) {
+            ui.setAnchorPoint(0.5, 0);
+            label.color = this.labelColor;
+            if (name === 'NoteLabel') {
+                node.setPosition(0, bottomY, 0);
+            } else if (name === 'DotLabel') {
+                node.setPosition(0, bottomY + noteLabelHeight / 1.5 + dotGap, 0);
+            } else if (name === 'DotLabel2') {
+                const dotY = bottomY + noteLabelHeight / 1.5 + dotGap;
+                const dot2Gap = 2;
+                node.setPosition(0, dotY + dot2Gap, 0);
+            } else {
+                node.setPosition(0, bottomY, 0);
+            }
         }
     }
 
