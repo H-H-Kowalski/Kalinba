@@ -1,12 +1,13 @@
-import { _decorator, Component, Node, Button, Label, Sprite, Color, tween, Vec3, UIOpacity } from 'cc';
+import { _decorator, Component, Node, Button, Label, Sprite, Color, tween, Vec3, UIOpacity, director } from 'cc';
 import { RoundedRect } from '../RoundedRect';
 import { SceneManager } from '../manager/SceneManager';
 const { ccclass, property } = _decorator;
 
+/** 挂在 mainscene 的 Canvas 上；开始按钮可拖入 startBtn，或留空由节点名 start_button 自动绑定 */
 @ccclass('HomeScene')
 export class HomeScene extends Component {
     @property(Button)
-    startBtn: Button = null;  // 开始游戏按钮
+    startBtn: Button = null;  // 开始游戏按钮（可选：不填则查找子节点 start_button）
 
     @property(Button)
     settingsButton: Button = null;  // 设置按钮
@@ -22,6 +23,22 @@ export class HomeScene extends Component {
 
     @property(Node)
     logoNode: Node = null;  // Logo节点
+
+    onLoad() {
+        this.bindStartButtonIfNeeded();
+    }
+
+    /** 未在编辑器绑定 startBtn 时，自动使用子节点 start_button */
+    private bindStartButtonIfNeeded() {
+        if (this.startBtn) return;
+        const n = this.node.getChildByName('start_button');
+        if (n) {
+            this.startBtn = n.getComponent(Button);
+            if (!this.startBtn) {
+                console.warn('[HomeScene] 节点 start_button 上缺少 Button 组件');
+            }
+        }
+    }
 
     start() {
         this.setupButtons();
@@ -112,18 +129,11 @@ export class HomeScene extends Component {
      * 切换到游戏场景
      */
     switchToGameScene() {
-        console.log('尝试切换到游戏场景...');
-        
-        // 优先使用SceneManager
-        const sceneManager = SceneManager.getInstance();
-        if (sceneManager) {
-            console.log('使用SceneManager跳转');
-            sceneManager.loadGameScene();
+        const sm = SceneManager.getInstance();
+        if (sm) {
+            sm.loadGameScene();
         } else {
-            // 备用方案：直接使用director加载
-            // 注意：这里直接硬编码了场景名 'playscene'，确保它和你的文件名一致
-            console.log('SceneManager未找到，直接使用director跳转');
-            const { director } = require('cc');
+            // mainscene 未挂 SceneManager 时仍可直接进游戏场景
             director.loadScene('playscene');
         }
     }
@@ -145,15 +155,15 @@ export class HomeScene extends Component {
     }
 
     onDestroy() {
-        // 移除按钮事件监听
-        if (this.startBtn) {
-            this.startBtn.node.off(Button.EventType.CLICK, this.onPlayButtonClick, this);
-        }
-        if (this.settingsButton) {
-            this.settingsButton.node.off(Button.EventType.CLICK, this.onSettingsButtonClick, this);
-        }
-        if (this.aboutButton) {
-            this.aboutButton.node.off(Button.EventType.CLICK, this.onAboutButtonClick, this);
-        }
+        // 移除按钮事件监听（场景切换时 node 可能已先销毁）
+        const off = (btn: Button | null, handler: () => void) => {
+            const n = btn?.node;
+            if (n && n.isValid) {
+                n.off(Button.EventType.CLICK, handler, this);
+            }
+        };
+        off(this.startBtn, this.onPlayButtonClick);
+        off(this.settingsButton, this.onSettingsButtonClick);
+        off(this.aboutButton, this.onAboutButtonClick);
     }
 }
