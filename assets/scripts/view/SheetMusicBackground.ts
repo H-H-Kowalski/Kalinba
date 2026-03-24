@@ -1,6 +1,7 @@
 import {
     _decorator,
     Component,
+    Enum,
     Sprite,
     SpriteFrame,
     Button,
@@ -14,6 +15,8 @@ import {
     UITransform,
     Mask,
     Color,
+    tween,
+    Vec3,
 } from 'cc';
 import { chooseImagesUpTo, isWeChatMiniGame } from '../manager/ChooseImageHelper';
 const { ccclass, property } = _decorator;
@@ -21,10 +24,16 @@ const { ccclass, property } = _decorator;
 const DISPLAY_NODE = 'SheetImage';
 const MASK_ROOT = 'MaskRoot';
 const DOT_ROW = 'DotRow';
+const SLIDES_ROOT = 'SlidesRoot';
 
 /** 指示器：当前页蓝色、其它浅灰（参考常见轮播点样式） */
 const DOT_ACTIVE = new Color(59, 130, 221, 255);
 const DOT_INACTIVE = new Color(200, 200, 200, 255);
+
+enum PageTurnMode {
+    HORIZONTAL = 0,
+    VERTICAL = 1,
+}
 
 /**
  * 顶部琴谱区域：轮播图；固定尺寸拉伸；仅左下/右下圆角。
@@ -33,8 +42,9 @@ const DOT_INACTIVE = new Color(200, 200, 200, 255);
  */
 @ccclass('SheetMusicBackground')
 export class SheetMusicBackground extends Component {
-    @property(SpriteFrame)
-    defaultSpriteFrame: SpriteFrame = null;
+    /** 默认轮播图（不选图时使用，支持配置 1~N 张） */
+    @property([SpriteFrame])
+    defaultSpriteFrames: SpriteFrame[] = [];
 
     @property(Button)
     selectImageButton: Button = null;
@@ -58,6 +68,15 @@ export class SheetMusicBackground extends Component {
     @property
     swipeThresholdPx: number = 40;
 
+    @property({ type: Enum(PageTurnMode), tooltip: '翻页模式：左右滑动 / 上下滑动' })
+    pageTurnMode: PageTurnMode = PageTurnMode.HORIZONTAL;
+
+    @property({ tooltip: '单张长图自动纵向滚动（按宽度适配，不切图）' })
+    enableTallImageAutoPaging: boolean = true;
+
+    @property({ tooltip: '单图滚动触发倍数：宽度适配后高度 > 容器高度 * 该值 才启用滚动' })
+    singleImageScrollThreshold: number = 1.25;
+
     @property
     displayWidth: number = 1120;
 
@@ -78,11 +97,21 @@ export class SheetMusicBackground extends Component {
 
     private _touchStartX = 0;
     private _touchStartY = 0;
-    private _carouselSpriteFrame: SpriteFrame | null = null;
+    private _carouselFrames: SpriteFrame[] = [];
     /** 浏览器 SPRITE_STENCIL 用的蒙版纹理，销毁时释放 */
     private _maskStencilTexture: Texture2D | null = null;
 
     private _dotRowNode: Node | null = null;
+    private _slidesRoot: Node | null = null;
+    private _isPickingImages = false;
+    private _forceVerticalPaging = false;
+    private _singleTallScrollActive = false;
+    private _singleTallMinY = 0;
+    private _singleTallMaxY = 0;
+    private _touchStartRootY = 0;
+    private _touchDragging = false;
+    private _dragDx = 0;
+    private _dragDy = 0;
 
     onLoad() {
         this.setupSizeMaskAndSpriteHost();
@@ -95,16 +124,22 @@ export class SheetMusicBackground extends Component {
             return;
         }
 
-        if (this.defaultSpriteFrame && !this.sprite.spriteFrame) {
-            this.sprite.spriteFrame = this.defaultSpriteFrame;
+        const defaults = this.getDefaultFramesForUI();
+        if (defaults.length > 0 && !this.sprite.spriteFrame) {
+            this.sprite.spriteFrame = defaults[0];
         }
 
         this.applySpriteStretch();
+        this.ensureSlidesRoot();
+        this.rebuildSlides(true);
+        if (this.sprite?.node) {
+            this.sprite.node.active = false;
+        }
 
         if (this.selectImageButton) {
             this.selectImageButton.node.on(Button.EventType.CLICK, this.openImagePicker, this);
         }
-        if (this.chooseImageButton) {
+        if (this.chooseImageButton && this.chooseImageButton.node !== this.selectImageButton?.node) {
             this.chooseImageButton.node.on(Button.EventType.CLICK, this.openImagePicker, this);
         }
         if (this.prevButton) {
@@ -115,6 +150,7 @@ export class SheetMusicBackground extends Component {
         }
 
         this.node.on(Node.EventType.TOUCH_START, this.onTouchStart, this);
+        this.node.on(Node.EventType.TOUCH_MOVE, this.onTouchMove, this);
         this.node.on(Node.EventType.TOUCH_END, this.onTouchEnd, this);
         this.node.on(Node.EventType.TOUCH_CANCEL, this.onTouchEnd, this);
 
@@ -137,11 +173,120 @@ export class SheetMusicBackground extends Component {
      * UI 用「页数」：无用户选图时若仍有默认图/当前 Sprite 有帧，计为 1 页，便于显示圆点与 1/1。
      */
     private getSlideCountForUI(): number {
-        const n = this.carouselTextures.length;
+        if (this._singleTallScrollActive) {
+            return this.getTallVirtualPageCount();
+        }
+        const n = this.getActiveFrames().length;
         if (n > 0) return n;
-        if (this.defaultSpriteFrame) return 1;
         if (this.sprite?.spriteFrame) return 1;
         return 0;
+    }
+
+    private getDefaultFramesForUI(): SpriteFrame[] {
+        return (this.defaultSpriteFrames || []).filter((f) => !!f);
+    }
+
+    private getActiveFrames(): SpriteFrame[] {
+        if (this._carouselFrames.length > 0) return this._carouselFrames;
+        return this.getDefaultFramesForUI();
+    }
+
+    private getCurrentPageTurnMode(): PageTurnMode {
+        return this._forceVerticalPaging ? PageTurnMode.VERTICAL : this.pageTurnMode;
+    }
+
+    private getTextureSize(tex: Texture2D): { w: number; h: number } {
+        const anyTex = tex as unknown as {
+            __srcW?: number;
+            __srcH?: number;
+            width?: number;
+            height?: number;
+            image?: {
+                width?: number;
+                height?: number;
+                _nativeAsset?: {
+                    width?: number;
+                    height?: number;
+                    naturalWidth?: number;
+                    naturalHeight?: number;
+                    videoWidth?: number;
+                    videoHeight?: number;
+                };
+            };
+        };
+        const native = anyTex.image?._nativeAsset;
+        const w = Math.floor(
+            anyTex.__srcW
+            ?? anyTex.width
+            ?? anyTex.image?.width
+            ?? native?.naturalWidth
+            ?? native?.videoWidth
+            ?? native?.width
+            ?? 0,
+        );
+        const h = Math.floor(
+            anyTex.__srcH
+            ?? anyTex.height
+            ?? anyTex.image?.height
+            ?? native?.naturalHeight
+            ?? native?.videoHeight
+            ?? native?.height
+            ?? 0,
+        );
+        return { w: Math.max(0, w), h: Math.max(0, h) };
+    }
+
+    private updateSingleTallScrollBounds() {
+        if (!this._singleTallScrollActive || this.carouselTextures.length !== 1) {
+            this._singleTallMinY = 0;
+            this._singleTallMaxY = 0;
+            return;
+        }
+        const { w, h } = this.getTextureSize(this.carouselTextures[0]);
+        if (w <= 0 || h <= 0) {
+            this._singleTallScrollActive = false;
+            this._forceVerticalPaging = false;
+            this._singleTallMinY = 0;
+            this._singleTallMaxY = 0;
+            return;
+        }
+        const contentH = this.displayWidth * h / w;
+        const threshold = Math.max(1.01, this.singleImageScrollThreshold);
+        if (contentH <= this.displayHeight * threshold) {
+            this._singleTallScrollActive = false;
+            this._forceVerticalPaging = false;
+            this._singleTallMinY = 0;
+            this._singleTallMaxY = 0;
+            return;
+        }
+        this._singleTallMinY = (this.displayHeight - contentH) * 0.5;
+        this._singleTallMaxY = (contentH - this.displayHeight) * 0.5;
+    }
+
+    private getTallVirtualPageCount(): number {
+        if (!this._singleTallScrollActive || this.carouselTextures.length !== 1) return 1;
+        const { w, h } = this.getTextureSize(this.carouselTextures[0]);
+        if (w <= 0 || h <= 0) return 1;
+        const contentH = this.displayWidth * h / w;
+        return Math.max(1, Math.ceil(contentH / Math.max(1, this.displayHeight)));
+    }
+
+    private getTallPageIndexByY(y: number): number {
+        const pageCount = this.getTallVirtualPageCount();
+        if (pageCount <= 1) return 0;
+        const range = this._singleTallMaxY - this._singleTallMinY;
+        if (range <= 1e-6) return 0;
+        const t = (y - this._singleTallMinY) / range;
+        const idx = Math.round(t * (pageCount - 1));
+        return Math.max(0, Math.min(pageCount - 1, idx));
+    }
+
+    private getTallYByPageIndex(index: number): number {
+        const pageCount = this.getTallVirtualPageCount();
+        if (pageCount <= 1) return this._singleTallMinY;
+        const i = Math.max(0, Math.min(pageCount - 1, index));
+        const t = i / (pageCount - 1);
+        return this._singleTallMinY + (this._singleTallMaxY - this._singleTallMinY) * t;
     }
 
     /** 点击圆点跳转到对应张 */
@@ -149,7 +294,14 @@ export class SheetMusicBackground extends Component {
         const n = this.getSlideCountForUI();
         if (n === 0 || index < 0 || index >= n) return;
         this.carouselIndex = index;
-        this.applyCurrentSlide();
+        if (this._singleTallScrollActive && this._slidesRoot) {
+            const y = this.getTallYByPageIndex(index);
+            tween(this._slidesRoot)
+                .to(0.12, { position: new Vec3(0, y, 0) })
+                .start();
+        } else {
+            this.applyCurrentSlide();
+        }
         this.updateNavAndPageLabel();
     }
 
@@ -194,8 +346,12 @@ export class SheetMusicBackground extends Component {
         row.active = true;
 
         const gap = 28;
-        while (row.children.length > n) {
-            row.children[row.children.length - 1].destroy();
+        // 不能用 while + destroy：destroy 是延迟生效，children.length 本帧不变会导致死循环卡死
+        for (let i = row.children.length - 1; i >= n; i--) {
+            const child = row.children[i];
+            if (!child) continue;
+            child.removeFromParent();
+            child.destroy();
         }
         for (let i = row.children.length; i < n; i++) {
             const idx = i;
@@ -449,39 +605,196 @@ export class SheetMusicBackground extends Component {
         }
     }
 
+    private ensureSlidesRoot() {
+        const mr = this.getMaskRoot();
+        if (!mr) return;
+        let root = mr.getChildByName(SLIDES_ROOT);
+        if (!root) {
+            root = new Node(SLIDES_ROOT);
+            const ui = root.addComponent(UITransform);
+            ui.setContentSize(this.displayWidth, this.displayHeight);
+            ui.setAnchorPoint(0.5, 0.5);
+            root.setParent(mr);
+            root.setPosition(0, 0, 0);
+        }
+        this._slidesRoot = root;
+    }
+
+    private rebuildSlides(force: boolean) {
+        this.ensureSlidesRoot();
+        if (!this._slidesRoot) return;
+        const root = this._slidesRoot;
+        const frames = this.getActiveFrames();
+        if (force || root.children.length !== frames.length) {
+            for (const c of [...root.children]) {
+                c.removeFromParent();
+                c.destroy();
+            }
+            for (let i = 0; i < frames.length; i++) {
+                const n = new Node(`Slide_${i}`);
+                const ui = n.addComponent(UITransform);
+                ui.setContentSize(this.displayWidth, this.displayHeight);
+                ui.setAnchorPoint(0.5, 0.5);
+                const s = n.addComponent(Sprite);
+                s.sizeMode = Sprite.SizeMode.CUSTOM;
+                s.spriteFrame = frames[i];
+                n.setParent(root);
+            }
+        }
+        const count = Math.min(frames.length, root.children.length);
+        for (let i = 0; i < count; i++) {
+            const ch = root.children[i];
+            const s = ch.getComponent(Sprite);
+            if (s) s.spriteFrame = frames[i] ?? null;
+            const ui = ch.getComponent(UITransform);
+            if (ui) {
+                if (i === 0 && this.carouselTextures.length === 1) {
+                    // 单图始终按原图宽高比显示（宽度贴合容器），避免被容器比例强拉伸
+                    const { w, h } = this.getTextureSize(this.carouselTextures[0]);
+                    const contentH = (w > 0 && h > 0) ? (this.displayWidth * h / w) : this.displayHeight;
+                    if (this._singleTallScrollActive) {
+                        ui.setContentSize(this.displayWidth, Math.max(this.displayHeight, contentH));
+                    } else {
+                        ui.setContentSize(this.displayWidth, contentH);
+                    }
+                } else {
+                    ui.setContentSize(this.displayWidth, this.displayHeight);
+                }
+            }
+            if (this.getCurrentPageTurnMode() !== PageTurnMode.VERTICAL) {
+                ch.setPosition(i * this.displayWidth, 0, 0);
+            } else {
+                ch.setPosition(0, -i * this.displayHeight, 0);
+            }
+        }
+    }
+
+    private getRootBasePos(index: number): Vec3 {
+        if (this.getCurrentPageTurnMode() !== PageTurnMode.VERTICAL) {
+            return new Vec3(-index * this.displayWidth, 0, 0);
+        }
+        return new Vec3(0, index * this.displayHeight, 0);
+    }
+
+    private changeToIndex(targetIndex: number, animated: boolean) {
+        const n = this.getSlideCountForUI();
+        if (n <= 0) return;
+        this.carouselIndex = Math.max(0, Math.min(targetIndex, n - 1));
+        this.applyCurrentSlideInternal(animated);
+        this.updateNavAndPageLabel();
+    }
+
     private onTouchStart(e: EventTouch) {
+        if (this._isPickingImages) return;
         const p = e.getUILocation();
         this._touchStartX = p.x;
         this._touchStartY = p.y;
+        this._touchStartRootY = this._slidesRoot ? this._slidesRoot.position.y : 0;
+        this._dragDx = 0;
+        this._dragDy = 0;
+        this._touchDragging = true;
     }
 
-    private onTouchEnd(e: EventTouch) {
-        if (this.carouselTextures.length <= 1) return;
+    private onTouchMove(e: EventTouch) {
+        if (!this._touchDragging || this._isPickingImages || !this._slidesRoot) return;
+        const n = this.getSlideCountForUI();
+        if (n <= 1 && !this._singleTallScrollActive) return;
         const p = e.getUILocation();
         const dx = p.x - this._touchStartX;
         const dy = p.y - this._touchStartY;
-        if (Math.abs(dx) < this.swipeThresholdPx || Math.abs(dx) < Math.abs(dy)) return;
-        if (dx < 0) this.goNext();
-        else this.goPrev();
+        if (this._singleTallScrollActive) {
+            if (Math.abs(dy) < Math.abs(dx)) return;
+            // 长图模式：手指上划(dy<0)时，内容也应向上滚动
+            let y = this._touchStartRootY + dy;
+            y = Math.max(this._singleTallMinY, Math.min(this._singleTallMaxY, y));
+            this._slidesRoot.setPosition(0, y, 0);
+            const idx = this.getTallPageIndexByY(y);
+            if (idx !== this.carouselIndex) {
+                this.carouselIndex = idx;
+                this.updateNavAndPageLabel();
+            }
+            return;
+        }
+        const isVertical = this.getCurrentPageTurnMode() === PageTurnMode.VERTICAL;
+        if (!isVertical && Math.abs(dx) < Math.abs(dy)) return;
+        if (isVertical && Math.abs(dy) < Math.abs(dx)) return;
+
+        const atFirst = this.carouselIndex <= 0;
+        const atLast = this.carouselIndex >= n - 1;
+        const overEdge = !isVertical
+            ? ((atFirst && dx > 0) || (atLast && dx < 0))
+            : ((atFirst && dy > 0) || (atLast && dy < 0));
+        const damp = overEdge ? 0.45 : 1.0;
+
+        this._dragDx = dx * damp;
+        this._dragDy = dy * damp;
+        const base = this.getRootBasePos(this.carouselIndex);
+        const x = base.x + (isVertical ? 0 : this._dragDx);
+        const y = base.y + (isVertical ? -this._dragDy : 0);
+        this._slidesRoot.setPosition(x, y, base.z);
+    }
+
+    private onTouchEnd(e: EventTouch) {
+        if (!this._touchDragging) return;
+        this._touchDragging = false;
+        if (this._isPickingImages) return;
+        const n = this.getSlideCountForUI();
+        if (n <= 1 && !this._singleTallScrollActive) return;
+        if (this._singleTallScrollActive) {
+            // 不做段落吸附，停在用户松手位置
+            if (this._slidesRoot) {
+                const idx = this.getTallPageIndexByY(this._slidesRoot.position.y);
+                this.carouselIndex = idx;
+            }
+            this.updateNavAndPageLabel();
+            return;
+        }
+        const p = e.getUILocation();
+        const dx = p.x - this._touchStartX;
+        const dy = p.y - this._touchStartY;
+        const isVertical = this.getCurrentPageTurnMode() === PageTurnMode.VERTICAL;
+        const main = isVertical ? dy : dx;
+        const side = isVertical ? dx : dy;
+        if (Math.abs(main) < this.swipeThresholdPx || Math.abs(main) < Math.abs(side)) {
+            this.resetDragVisual();
+            return;
+        }
+        const target = main < 0 ? this.carouselIndex + 1 : this.carouselIndex - 1;
+        if (target < 0 || target >= n) {
+            this.resetDragVisual();
+            return;
+        }
+        this.changeToIndex(target, true);
+    }
+
+    private resetDragVisual() {
+        if (!this._slidesRoot) return;
+        const base = this.getRootBasePos(this.carouselIndex);
+        tween(this._slidesRoot)
+            .to(0.12, { position: base })
+            .start();
+        this._dragDx = 0;
+        this._dragDy = 0;
     }
 
     goPrev() {
+        if (this._isPickingImages) return;
+        if (this._singleTallScrollActive) return;
         if (this.carouselIndex <= 0) return;
-        this.carouselIndex--;
-        this.applyCurrentSlide();
-        this.updateNavAndPageLabel();
+        this.changeToIndex(this.carouselIndex - 1, true);
     }
 
     goNext() {
-        if (this.carouselIndex >= this.carouselTextures.length - 1) return;
-        this.carouselIndex++;
-        this.applyCurrentSlide();
-        this.updateNavAndPageLabel();
+        if (this._isPickingImages) return;
+        if (this._singleTallScrollActive) return;
+        const n = this.getSlideCountForUI();
+        if (this.carouselIndex >= n - 1) return;
+        this.changeToIndex(this.carouselIndex + 1, true);
     }
 
     private updateNavAndPageLabel() {
         const n = this.getSlideCountForUI();
-        const nCarousel = this.carouselTextures.length;
+        const nCarousel = n;
         if (this.pageLabel) {
             if (n === 0) {
                 this.pageLabel.string = '';
@@ -490,60 +803,167 @@ export class SheetMusicBackground extends Component {
             }
         }
         if (this.prevButton) {
-            this.prevButton.interactable = nCarousel > 1 && this.carouselIndex > 0;
+            this.prevButton.interactable = !this._singleTallScrollActive && nCarousel > 1 && this.carouselIndex > 0;
         }
         if (this.nextButton) {
-            this.nextButton.interactable = nCarousel > 1 && this.carouselIndex < nCarousel - 1;
+            this.nextButton.interactable = !this._singleTallScrollActive && nCarousel > 1 && this.carouselIndex < nCarousel - 1;
         }
         this.updateDotIndicators();
     }
 
     async openImagePicker() {
+        if (this._isPickingImages) {
+            return;
+        }
         if (!isWeChatMiniGame() && !sys.isBrowser) {
             console.warn('[SheetMusicBackground] 当前平台不支持选择本地图片');
             return;
         }
 
-        const res = await chooseImagesUpTo(this.maxImages);
-        if (!res.ok || res.urls.length === 0) {
-            if (res.errMsg && !String(res.errMsg).includes('未选择')) {
-                console.warn('[SheetMusicBackground] 选图失败:', res.errMsg);
+        this._isPickingImages = true;
+        if (this.prevButton) this.prevButton.interactable = false;
+        if (this.nextButton) this.nextButton.interactable = false;
+        try {
+            const res = await chooseImagesUpTo(this.maxImages);
+            if (!res.ok || res.urls.length === 0) {
+                if (res.errMsg && !String(res.errMsg).includes('未选择')) {
+                    console.warn('[SheetMusicBackground] 选图失败:', res.errMsg);
+                }
+                return;
             }
-            return;
-        }
 
-        if (this.blobRevoke) {
-            this.blobRevoke();
-            this.blobRevoke = null;
+            const oldRevoke = this.blobRevoke;
+            this.blobRevoke = res.revokeAll ?? null;
+            await this.loadCarouselFromUrls(res.urls);
+            if (oldRevoke) {
+                oldRevoke();
+            }
+        } finally {
+            this._isPickingImages = false;
+            this.updateNavAndPageLabel();
         }
-        this.blobRevoke = res.revokeAll ?? null;
-
-        await this.loadCarouselFromUrls(res.urls);
     }
 
-    private loadImageFromUrl(url: string): Promise<ImageAsset | null> {
+    private toTexture2D(asset: unknown): Texture2D | null {
+        if (!asset) return null;
+        const maybeTexture = asset as Partial<Texture2D>;
+        if (typeof maybeTexture.getGFXTexture === 'function') {
+            return asset as Texture2D;
+        }
+        const maybeSpriteFrame = asset as Partial<SpriteFrame> & { texture?: unknown };
+        if (maybeSpriteFrame.texture) {
+            return maybeSpriteFrame.texture as Texture2D;
+        }
+        const maybeImage = asset as Partial<ImageAsset> & { width?: number; height?: number };
+        if (typeof maybeImage.width === 'number' && typeof maybeImage.height === 'number') {
+            const tex = new Texture2D();
+            tex.image = asset as ImageAsset;
+            return tex;
+        }
+        return null;
+    }
+
+    private createTextureFromNativeImage(nativeImage: unknown): Texture2D | null {
+        try {
+            const native = nativeImage as {
+                width?: number;
+                height?: number;
+                naturalWidth?: number;
+                naturalHeight?: number;
+                videoWidth?: number;
+                videoHeight?: number;
+            };
+            const srcW = Math.floor(native.naturalWidth ?? native.videoWidth ?? native.width ?? 0);
+            const srcH = Math.floor(native.naturalHeight ?? native.videoHeight ?? native.height ?? 0);
+            const imageAsset = new ImageAsset();
+            const mutable = imageAsset as unknown as { reset?: (native: unknown) => void; _nativeAsset?: unknown };
+            if (typeof mutable.reset === 'function') {
+                mutable.reset(nativeImage);
+            } else {
+                mutable._nativeAsset = nativeImage;
+            }
+            const tex = new Texture2D();
+            tex.image = imageAsset;
+            (tex as unknown as { __srcW?: number; __srcH?: number }).__srcW = srcW;
+            (tex as unknown as { __srcW?: number; __srcH?: number }).__srcH = srcH;
+            return tex;
+        } catch {
+            return null;
+        }
+    }
+
+    private loadTextureFromBrowserUrl(url: string): Promise<Texture2D | null> {
         return new Promise((resolve) => {
-            assetManager.loadRemote<ImageAsset>(url, { ext: '.png' }, (err, asset) => {
-                if (!err && asset) {
-                    resolve(asset);
-                    return;
-                }
-                assetManager.loadRemote<ImageAsset>(url, { ext: '.jpg' }, (err2, asset2) => {
-                    resolve(err2 ? null : asset2!);
-                });
-            });
+            if (!sys.isBrowser || typeof Image === 'undefined') {
+                resolve(null);
+                return;
+            }
+            const img = new Image();
+            let settled = false;
+            const finish = (tex: Texture2D | null) => {
+                if (settled) return;
+                settled = true;
+                resolve(tex);
+            };
+            const timer = setTimeout(() => finish(null), 6000);
+            img.onload = () => {
+                clearTimeout(timer);
+                finish(this.createTextureFromNativeImage(img));
+            };
+            img.onerror = () => {
+                clearTimeout(timer);
+                finish(null);
+            };
+            img.src = url;
         });
     }
 
-    private async loadCarouselFromUrls(urls: string[]) {
-        this.clearCarouselTexturesOnly();
+    private loadImageFromUrl(url: string): Promise<Texture2D | null> {
+        const exts = ['', '.png', '.jpg', '.jpeg', '.webp'];
+        const tryLoadOnce = (ext: string): Promise<Texture2D | null> => {
+            return new Promise((resolve) => {
+                let settled = false;
+                const finish = (asset: Texture2D | null) => {
+                    if (settled) return;
+                    settled = true;
+                    resolve(asset);
+                };
+                const timer = setTimeout(() => finish(null), 6000);
+                const done = (err: Error | null, asset?: unknown) => {
+                    clearTimeout(timer);
+                    if (err || !asset) {
+                        finish(null);
+                        return;
+                    }
+                    const tex = this.toTexture2D(asset);
+                    finish(tex);
+                };
+                if (ext) {
+                    assetManager.loadRemote(url, { ext }, done);
+                } else {
+                    assetManager.loadRemote(url, done);
+                }
+            });
+        };
 
+        return (async () => {
+            for (const ext of exts) {
+                const asset = await tryLoadOnce(ext);
+                if (asset) return asset;
+            }
+            if (sys.isBrowser) {
+                const texFromImg = await this.loadTextureFromBrowserUrl(url);
+                if (texFromImg) return texFromImg;
+            }
+            return null;
+        })();
+    }
+
+    private async loadCarouselFromUrls(urls: string[]) {
         const loaded: Texture2D[] = [];
         for (const url of urls) {
-            const img = await this.loadImageFromUrl(url);
-            if (img) {
-                const tex = new Texture2D();
-                tex.image = img;
+            const tex = await this.loadImageFromUrl(url);
+            if (tex) {
                 loaded.push(tex);
             }
         }
@@ -553,35 +973,82 @@ export class SheetMusicBackground extends Component {
             return;
         }
 
+        const oldTextures = this.carouselTextures;
+        const oldFrames = this._carouselFrames;
         this.carouselTextures = loaded;
+        this._singleTallScrollActive = false;
+        this._forceVerticalPaging = false;
+        if (loaded.length === 1) {
+            const { w, h } = this.getTextureSize(loaded[0]);
+            const contentH = (w > 0 && h > 0) ? (this.displayWidth * h / w) : 0;
+            // 以“宽度适配后是否超过可视高度”为准，避免仅用 h/w 阈值误判导致单图不能滚动
+            const threshold = Math.max(1.01, this.singleImageScrollThreshold);
+            if (this.enableTallImageAutoPaging && contentH > this.displayHeight * threshold) {
+                this._singleTallScrollActive = true;
+                this._forceVerticalPaging = true;
+            }
+        }
+        this._carouselFrames = loaded.map((tex) => {
+            const sf = new SpriteFrame();
+            sf.texture = tex;
+            return sf;
+        });
+        this.updateSingleTallScrollBounds();
         this.carouselIndex = 0;
-        this.applyCurrentSlide();
+        this.rebuildSlides(true);
+        this.applyCurrentSlideInternal(false);
         this.updateNavAndPageLabel();
+        this.scheduleOnce(() => {
+            const using = new Set(this.carouselTextures);
+            for (const t of oldTextures) {
+                if (!t || !t.isValid) continue;
+                if (using.has(t)) continue;
+                t.destroy();
+            }
+            for (const sf of oldFrames) {
+                if (sf && sf.isValid) sf.destroy();
+            }
+        }, 0);
+    }
+
+    private applyCurrentSlideInternal(animated: boolean) {
+        if (!this._slidesRoot) return;
+        const n = this.getSlideCountForUI();
+        if (n <= 0) return;
+        if (this._singleTallScrollActive) {
+            this.carouselIndex = Math.max(0, Math.min(this.carouselIndex, this.getTallVirtualPageCount() - 1));
+            this.rebuildSlides(false);
+            const to = new Vec3(0, this.getTallYByPageIndex(this.carouselIndex), 0);
+            if (animated) {
+                tween(this._slidesRoot).to(0.16, { position: to }).start();
+            } else {
+                this._slidesRoot.setPosition(to);
+            }
+            return;
+        }
+        this.carouselIndex = Math.max(0, Math.min(this.carouselIndex, n - 1));
+        this.rebuildSlides(false);
+        const base = this.getRootBasePos(this.carouselIndex);
+        if (animated) {
+            tween(this._slidesRoot).to(0.16, { position: base }).start();
+        } else {
+            this._slidesRoot.setPosition(base);
+        }
     }
 
     private applyCurrentSlide() {
-        if (!this.sprite || this.carouselTextures.length === 0) return;
-        const tex = this.carouselTextures[this.carouselIndex];
-        if (!this._carouselSpriteFrame) {
-            this._carouselSpriteFrame = new SpriteFrame();
-        }
-        this._carouselSpriteFrame.texture = tex;
-        this.sprite.spriteFrame = this._carouselSpriteFrame;
-        this.applySpriteStretch();
+        this.applyCurrentSlideInternal(false);
     }
 
     private clearCarouselTexturesOnly() {
-        // 必须先解除 Sprite 对轮播纹理的引用，再 destroy，否则下一帧 batcher 读 texture.hash 会报错
-        if (this.sprite && this.sprite.spriteFrame === this._carouselSpriteFrame) {
-            if (this.defaultSpriteFrame) {
-                this.sprite.spriteFrame = this.defaultSpriteFrame;
-            } else {
-                this.sprite.spriteFrame = null;
-            }
+        this._singleTallScrollActive = false;
+        this._forceVerticalPaging = false;
+        this._singleTallMinY = 0;
+        this._singleTallMaxY = 0;
+        for (const sf of this._carouselFrames) {
+            if (sf && sf.isValid) sf.destroy();
         }
-        if (this._carouselSpriteFrame) {
-            this._carouselSpriteFrame.texture = null;
-        }
+        this._carouselFrames = [];
         for (const t of this.carouselTextures) {
             if (t && t.isValid) {
                 t.destroy();
@@ -597,11 +1064,9 @@ export class SheetMusicBackground extends Component {
             this.blobRevoke = null;
         }
         this.clearCarouselTexturesOnly();
-        this._carouselSpriteFrame = null;
-        if (this.sprite && this.defaultSpriteFrame) {
-            this.sprite.spriteFrame = this.defaultSpriteFrame;
-            this.applySpriteStretch();
-        }
+        this.carouselIndex = 0;
+        this.rebuildSlides(true);
+        this.applyCurrentSlideInternal(false);
         this.updateNavAndPageLabel();
     }
 
@@ -609,7 +1074,7 @@ export class SheetMusicBackground extends Component {
         if (this.selectImageButton) {
             this.selectImageButton.node.off(Button.EventType.CLICK, this.openImagePicker, this);
         }
-        if (this.chooseImageButton) {
+        if (this.chooseImageButton && this.chooseImageButton.node !== this.selectImageButton?.node) {
             this.chooseImageButton.node.off(Button.EventType.CLICK, this.openImagePicker, this);
         }
         if (this.prevButton) {
@@ -619,6 +1084,7 @@ export class SheetMusicBackground extends Component {
             this.nextButton.node.off(Button.EventType.CLICK, this.goNext, this);
         }
         this.node.off(Node.EventType.TOUCH_START, this.onTouchStart, this);
+        this.node.off(Node.EventType.TOUCH_MOVE, this.onTouchMove, this);
         this.node.off(Node.EventType.TOUCH_END, this.onTouchEnd, this);
         this.node.off(Node.EventType.TOUCH_CANCEL, this.onTouchEnd, this);
 
