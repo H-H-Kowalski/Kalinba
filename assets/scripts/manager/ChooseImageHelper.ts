@@ -1,85 +1,142 @@
 /**
- * 本地图片选择工具
- * 通过微信小游戏 API 实现从相册选择图片或拍照，供 Cocos 使用。
- * 文档：https://developers.weixin.qq.com/minigame/dev/api/media/image/wx.chooseImage.html
+ * 本地图片选择（微信小游戏）
  *
- * Cocos 中显示选中的图片：
- * - 微信小游戏发布后，success 返回的 tempFilePath 为本地临时路径。
- * - 可用 assetManager.loadRemote(tempFilePath, (err, texture) => { ... }) 加载为 Texture2D，
- *   再通过 SpriteFrame.createWithTexture(texture) 显示。
- * - 若引擎或插件提供「从本地路径创建纹理」的接口，也可直接使用 tempFilePath。
+ * 优先使用 wx.chooseMedia（基础库 ≥2.23，官方推荐替代维护减弱的 chooseImage）：
+ * https://developers.weixin.qq.com/minigame/dev/api/media/video/wx.chooseMedia.html
+ * 低版本回退：wx.chooseImage
+ * https://developers.weixin.qq.com/minigame/dev/api/media/image/wx.chooseImage.html
+ *
+ * 选中后 tempFilePath 可交给 assetManager.loadRemote 等加载为纹理。
  */
 
-/** 微信小游戏环境下的 wx 类型（仅类型声明，运行时有全局 wx） */
-declare const wx: {
-    chooseImage: (options: {
-        count?: number;
-        sizeType?: string[];
-        sourceType?: ('album' | 'camera')[];
-        success?: (res: { tempFilePaths: string[]; tempFiles?: Array<{ path: string; size: number }> }) => void;
-        fail?: (err: unknown) => void;
-    }) => void;
-    createImage?: () => {
-        src: string;
-        onload?: () => void;
-        onerror?: (e: unknown) => void;
-        width: number;
-        height: number;
-    };
-} | undefined;
+import { getWx } from './WeChatNative';
+
+export { getWx };
+
+type WxChooseImageOptions = {
+    count?: number;
+    sizeType?: string[];
+    sourceType?: ('album' | 'camera')[];
+    success?: (res: { tempFilePaths: string[]; tempFiles?: Array<{ path: string; size: number }> }) => void;
+    fail?: (err: unknown) => void;
+};
+
+type WxChooseMediaOptions = {
+    count?: number;
+    mediaType?: string[];
+    sourceType?: ('album' | 'camera')[];
+    sizeType?: string[];
+    success?: (res: { tempFiles?: Array<{ tempFilePath?: string }> }) => void;
+    fail?: (err: unknown) => void;
+};
 
 export interface ChooseImageResult {
-    /** 是否成功 */
     ok: boolean;
-    /** 临时文件路径（微信小游戏），选一张时取 [0] */
     tempFilePath?: string;
-    /** 多张时的路径列表 */
     tempFilePaths?: string[];
-    /** 错误信息 */
     errMsg?: string;
 }
 
-/**
- * 是否运行在微信小游戏环境
- */
+/** 能否在微信里调起选图（chooseMedia 或 chooseImage 任一可用） */
 export function isWeChatMiniGame(): boolean {
-    return typeof wx !== 'undefined' && typeof wx.chooseImage === 'function';
+    const w = getWx() as { chooseMedia?: unknown; chooseImage?: unknown } | undefined;
+    if (!w) return false;
+    return typeof w.chooseMedia === 'function' || typeof w.chooseImage === 'function';
+}
+
+function normalizeSourceType(sourceType?: 'album' | 'camera'): ('album' | 'camera')[] {
+    return sourceType ? [sourceType] : ['album', 'camera'];
+}
+
+/** 微信 fail 常为对象；控制台 [object Object] 时需展开 errMsg / errno */
+function formatWxChooseErr(err: unknown): string {
+    if (err == null) {
+        return '选择失败';
+    }
+    if (typeof err === 'string') {
+        return err;
+    }
+    if (typeof err === 'object') {
+        const o = err as { errMsg?: string; errno?: number; message?: string };
+        const base = o.errMsg || o.message || JSON.stringify(err);
+        if (o.errno === 1026 || /1026|privacy|隐私|用户隐私|未声明/i.test(base)) {
+            return `${base}（请在微信公众平台：设置 → 基本设置 → 用户隐私保护指引 中声明相册/摄像头用途）`;
+        }
+        return base;
+    }
+    return String(err);
 }
 
 /**
- * 打开相册/相机选择一张本地图片（仅微信小游戏）
- * @param sourceType 'album' 仅相册 | 'camera' 仅拍照 | 不传则都可用
- * @returns Promise<ChooseImageResult> 成功时 tempFilePath 为临时路径，可用于后续加载纹理
+ * 微信内选图：优先 chooseMedia，失败或未实现时回退 chooseImage
  */
-export function chooseImage(sourceType?: 'album' | 'camera'): Promise<ChooseImageResult> {
+function pickWechatImagePaths(
+    count: number,
+    sourceType?: 'album' | 'camera',
+): Promise<{ ok: boolean; paths: string[]; errMsg?: string }> {
     return new Promise((resolve) => {
-        if (!isWeChatMiniGame()) {
-            resolve({
-                ok: false,
-                errMsg: '当前不是微信小游戏环境，无法使用 wx.chooseImage',
+        const w = getWx() as {
+            chooseMedia?: (o: WxChooseMediaOptions) => void;
+            chooseImage?: (o: WxChooseImageOptions) => void;
+        };
+        if (!w) {
+            resolve({ ok: false, paths: [], errMsg: 'wx 不可用' });
+            return;
+        }
+        const st = normalizeSourceType(sourceType);
+        const finishFail = (err: unknown) => {
+            resolve({ ok: false, paths: [], errMsg: formatWxChooseErr(err) });
+        };
+
+        // 仅选图时优先 chooseImage：隐私与基础库上通常比 chooseMedia 更稳（避免 checkPrivacy apiName=chooseMedia type=undefined、errno 1026 等）
+        if (typeof w.chooseImage === 'function') {
+            w.chooseImage({
+                count,
+                sizeType: ['original', 'compressed'],
+                sourceType: st,
+                success(res) {
+                    const paths = res.tempFilePaths || [];
+                    resolve({ ok: paths.length > 0, paths });
+                },
+                fail: finishFail,
             });
             return;
         }
 
-        wx!.chooseImage({
-            count: 1,
-            sizeType: ['original', 'compressed'],
-            sourceType: sourceType ? [sourceType] : ['album', 'camera'],
-            success(res) {
-                const path = res.tempFilePaths && res.tempFilePaths[0];
-                resolve({
-                    ok: !!path,
-                    tempFilePath: path,
-                    tempFilePaths: res.tempFilePaths,
-                });
-            },
-            fail(err) {
-                resolve({
-                    ok: false,
-                    errMsg: err ? String(err) : '用户取消或选择失败',
-                });
-            },
-        });
+        if (typeof w.chooseMedia === 'function') {
+            w.chooseMedia({
+                count,
+                mediaType: ['image'],
+                sizeType: ['original', 'compressed'],
+                sourceType: st,
+                success(res) {
+                    const paths = (res.tempFiles || [])
+                        .map((f) => f.tempFilePath)
+                        .filter((p): p is string => !!p);
+                    resolve({ ok: paths.length > 0, paths });
+                },
+                fail: finishFail,
+            });
+            return;
+        }
+
+        resolve({ ok: false, paths: [], errMsg: '不支持选图 API' });
+    });
+}
+
+/**
+ * 打开相册/相机选择一张本地图片（仅微信小游戏）
+ */
+export function chooseImage(sourceType?: 'album' | 'camera'): Promise<ChooseImageResult> {
+    return pickWechatImagePaths(1, sourceType).then((r) => {
+        if (!r.ok) {
+            return { ok: false, errMsg: r.errMsg || '选择失败' };
+        }
+        return {
+            ok: true,
+            tempFilePath: r.paths[0],
+            tempFilePaths: r.paths,
+        };
     });
 }
 
@@ -87,73 +144,42 @@ export function chooseImage(sourceType?: 'album' | 'camera'): Promise<ChooseImag
  * 选择多张图片（最多 9 张）
  */
 export function chooseImageMultiple(count: number = 9): Promise<ChooseImageResult> {
-    return new Promise((resolve) => {
-        if (!isWeChatMiniGame()) {
-            resolve({ ok: false, errMsg: '仅支持微信小游戏环境' });
-            return;
+    const n = Math.min(9, Math.max(1, count));
+    return pickWechatImagePaths(n).then((r) => {
+        if (!r.ok) {
+            return { ok: false, errMsg: r.errMsg || '选择失败' };
         }
-        const n = Math.min(9, Math.max(1, count));
-        wx!.chooseImage({
-            count: n,
-            sizeType: ['original', 'compressed'],
-            sourceType: ['album', 'camera'],
-            success(res) {
-                resolve({
-                    ok: true,
-                    tempFilePath: res.tempFilePaths[0],
-                    tempFilePaths: res.tempFilePaths,
-                });
-            },
-            fail(err) {
-                resolve({
-                    ok: false,
-                    errMsg: err ? String(err) : '选择失败',
-                });
-            },
-        });
+        return {
+            ok: true,
+            tempFilePath: r.paths[0],
+            tempFilePaths: r.paths,
+        };
     });
 }
 
-/** 一次选择多张本地图片（用于谱子轮播等） */
 export interface ChooseImagesResult {
     ok: boolean;
-    /** 可传给 assetManager.loadRemote 的路径（微信临时路径 / Web blob URL） */
     urls: string[];
-    /** Web 下需在选择新一批图或不再使用时调用，释放 blob URL */
     revokeAll?: () => void;
     errMsg?: string;
 }
 
 /**
  * 从相册一次选择多张图片，最多 maxCount 张（默认最多 5）
- * - 微信小游戏：wx.chooseImage
- * - 浏览器：input[type=file][multiple]
+ * - 微信：wx.chooseMedia（优先） / wx.chooseImage
+ * - （已注释）浏览器：input[type=file][multiple]，仅 Web 预览用；微信小游戏发布不打包
  */
 export function chooseImagesUpTo(maxCount: number = 5): Promise<ChooseImagesResult> {
     const n = Math.min(5, Math.max(1, maxCount));
     if (isWeChatMiniGame()) {
-        return new Promise((resolve) => {
-            wx!.chooseImage({
-                count: n,
-                sizeType: ['original', 'compressed'],
-                sourceType: ['album', 'camera'],
-                success(res) {
-                    const paths = res.tempFilePaths || [];
-                    resolve({
-                        ok: paths.length > 0,
-                        urls: paths.slice(0, n),
-                    });
-                },
-                fail(err) {
-                    resolve({
-                        ok: false,
-                        urls: [],
-                        errMsg: err ? String(err) : '选择失败',
-                    });
-                },
-            });
+        return pickWechatImagePaths(n).then((r) => {
+            if (!r.ok) {
+                return { ok: false, urls: [], errMsg: r.errMsg };
+            }
+            return { ok: true, urls: r.paths.slice(0, n) };
         });
     }
+    /* 微信小游戏发布：下列分支不会执行，保留便于本地浏览器预览时恢复
     if (typeof document !== 'undefined') {
         return new Promise((resolve) => {
             const input = document.createElement('input');
@@ -173,5 +199,6 @@ export function chooseImagesUpTo(maxCount: number = 5): Promise<ChooseImagesResu
             input.click();
         });
     }
+    */
     return Promise.resolve({ ok: false, urls: [], errMsg: '当前环境不支持选图' });
 }

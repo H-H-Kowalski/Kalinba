@@ -52,7 +52,7 @@
     },
     "autoReleaseAssets": false,
     "_globals": {
-      "__id__": 40
+      "__id__": 41
     },
     "_id": "c842ece8-166a-497b-bb07-700b0d1da896"
   },
@@ -94,6 +94,9 @@
       },
       {
         "__id__": 39
+      },
+      {
+        "__id__": 40
       }
     ],
     "_prefab": null,
@@ -294,7 +297,7 @@
     "_priority": 0,
     "_fov": 45,
     "_fovAxis": 0,
-    "_orthoHeight": 681.128526645768,
+    "_orthoHeight": 360,
     "_near": 0,
     "_far": 2000,
     "_color": {
@@ -416,8 +419,97 @@
     },
     "_enabled": true,
     "__prefab": null,
-    "keySounds": [],
-    "clickIndicatorPrefab": null,
+    "keySounds": [
+      {
+        "__uuid__": "b51579fd-5eed-47a2-b04b-3544c9ad95b8",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "fd51b1e4-7c08-491a-91a3-2c2e701c2b04",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "5d9dd1d5-d5f4-41f6-91ee-1fb24b0e2f0c",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "7dde405f-b849-41fa-bf87-4f0b6e1de17a",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "a578f0c6-4388-460f-bd91-3ec4d217b3a7",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "b8c4120c-2c99-40d3-8fb4-1895a2b1f3ea",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "36dc0ec0-d9a3-404b-a71e-f5b7530336f1",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "10b5f0be-1197-45d2-bb00-09aaab1b5da2",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "6ecccd50-765e-47b0-bba0-501ddbdf73f5",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "7dde405f-b849-41fa-bf87-4f0b6e1de17a",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "f2111c89-6368-431c-afe3-c58a254229cd",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "4dd162e6-4d6f-4f5e-8f8b-b31bcc712724",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "e0db036d-5315-428b-b986-5b4c825994a8",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "50d37190-6455-4858-99f1-1cd2e61d1fbb",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "7a81173b-36aa-4138-9ede-acbd21573c5b",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "9d01a2f7-72a6-4ddb-a07e-69f8537765ed",
+        "__expectedType__": "cc.AudioClip"
+      },
+      {
+        "__uuid__": "e4e4afbe-9baf-4545-9e06-373b2acea8a2",
+        "__expectedType__": "cc.AudioClip"
+      }
+    ],
+    "clickIndicatorPrefab": {
+      "__uuid__": "2edaa44b-43c6-4857-bafb-87c6f6fdcb61",
+      "__expectedType__": "cc.Prefab"
+    },
+    "clickIndicatorEnabled": false,
+    "useSynth": true,
+    "synthStylePreset": 1,
+    "useManualSynthTuning": false,
+    "synthAttackSec": 0.01,
+    "synthFastDecaySec": 0.5,
+    "synthSlowDecaySec": 2.9,
+    "synthBasePeakGain": 0.78,
+    "synthFastDecayLevel": 0.14,
+    "synthOvertoneRatio": 2.71,
+    "synthOvertonePeakGain": 0.2,
+    "synthOvertoneDecaySec": 0.42,
+    "synthTransientFreqMul": 8.5,
+    "synthTransientPeakGain": 0.11,
+    "synthTransientDecaySec": 0.05,
+    "synthHpHz": 90,
+    "synthLpHz": 7200,
     "_id": "99yQ5/XAhIyLwH3UQFBpAA"
   },
   {
@@ -740,22 +832,10 @@
       "b": 255,
       "a": 255
     },
-    "_normalSprite": {
-      "__uuid__": "cab5fa8a-2d46-40bb-ac5c-6555f97e4248@f9941",
-      "__expectedType__": "cc.SpriteFrame"
-    },
-    "_hoverSprite": {
-      "__uuid__": "20835ba4-6145-4fbc-a58a-051ce700aa3e@f9941",
-      "__expectedType__": "cc.SpriteFrame"
-    },
-    "_pressedSprite": {
-      "__uuid__": "544e49d6-3f05-4fa8-9a9e-091f98fc2ce8@f9941",
-      "__expectedType__": "cc.SpriteFrame"
-    },
-    "_disabledSprite": {
-      "__uuid__": "951249e0-9f16-456d-8b85-a6ca954da16b@f9941",
-      "__expectedType__": "cc.SpriteFrame"
-    },
+    "_normalSprite": null,
+    "_hoverSprite": null,
+    "_pressedSprite": null,
+    "_disabledSprite": null,
     "_duration": 0.1,
     "_zoomScale": 1.2,
     "_target": {
@@ -973,15 +1053,7 @@
     "__prefab": null,
     "defaultSpriteFrames": [
       {
-        "__uuid__": "14f46867-194c-4d98-a854-f0f0a8898cc5@f9941",
-        "__expectedType__": "cc.SpriteFrame"
-      },
-      {
-        "__uuid__": "92a69440-adf4-4215-82f2-6ebdb74a9a18@f9941",
-        "__expectedType__": "cc.SpriteFrame"
-      },
-      {
-        "__uuid__": "1d2b3670-2db3-41fc-ae51-886e535065b3@f9941",
+        "__uuid__": "bdd088b1-6bc7-406d-af2f-d459cce53469@f9941",
         "__expectedType__": "cc.SpriteFrame"
       }
     ],
@@ -1024,7 +1096,7 @@
       "a": 255
     },
     "_spriteFrame": {
-      "__uuid__": "dda32e4e-76d6-4e48-af62-3e9beac584ee@f9941",
+      "__uuid__": "bdd088b1-6bc7-406d-af2f-d459cce53469@f9941",
       "__expectedType__": "cc.SpriteFrame"
     },
     "_type": 0,
@@ -1193,7 +1265,7 @@
       "b": 0,
       "a": 255
     },
-    "_string": "请输入曲谱",
+    "_string": "",
     "_horizontalAlign": 1,
     "_verticalAlign": 1,
     "_actualFontSize": 40,
@@ -1256,8 +1328,8 @@
     "_prefab": null,
     "_lpos": {
       "__type__": "cc.Vec3",
-      "x": 0,
-      "y": 0,
+      "x": -498,
+      "y": 39,
       "z": 0
     },
     "_lrot": {
@@ -1295,8 +1367,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 120,
-      "height": 50.4
+      "width": 239.9638975741014,
+      "height": 50.400000000000006
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -1325,10 +1397,10 @@
       "b": 35,
       "a": 255
     },
-    "_string": "小星星",
+    "_string": "《生日快乐》",
     "_horizontalAlign": 1,
     "_verticalAlign": 0,
-    "_actualFontSize": 40,
+    "_actualFontSize": 51.77777777777778,
     "_fontSize": 40,
     "_fontFamily": "Arial",
     "_lineHeight": 40,
@@ -1439,6 +1511,7 @@
     "maxChars": 10,
     "storageKey": "user_caption",
     "loadOnStart": true,
+    "defaultCaption": "《生日快乐》",
     "keepLabelCentered": true,
     "textBold": true,
     "_id": "a2RFQUwsBIyJ5L/0KUmlU7"
@@ -1464,7 +1537,7 @@
       "__id__": 29
     },
     "_returnType": 0,
-    "_string": "小星星",
+    "_string": "《生日快乐》",
     "_tabIndex": 0,
     "_backgroundImage": null,
     "_inputFlag": 5,
@@ -1541,30 +1614,48 @@
     "_id": "c5V1EV8IpMtrIvY1OE9t2u"
   },
   {
+    "__type__": "034dd89PcZDw53gkPdpwN/Y",
+    "_name": "",
+    "_objFlags": 0,
+    "__editorExtras__": {},
+    "node": {
+      "__id__": 2
+    },
+    "_enabled": true,
+    "__prefab": null,
+    "kalimbaManager": null,
+    "sheetMusicBackground": null,
+    "backButton": null,
+    "settingsButton": {
+      "__id__": 22
+    },
+    "_id": "af7Qd8X6RJZ5B8h+7D4VA/"
+  },
+  {
     "__type__": "cc.SceneGlobals",
     "ambient": {
-      "__id__": 41
-    },
-    "shadows": {
       "__id__": 42
     },
-    "_skybox": {
+    "shadows": {
       "__id__": 43
     },
-    "fog": {
+    "_skybox": {
       "__id__": 44
     },
-    "octree": {
+    "fog": {
       "__id__": 45
     },
-    "skin": {
+    "octree": {
       "__id__": 46
     },
-    "lightProbeInfo": {
+    "skin": {
       "__id__": 47
     },
-    "postSettings": {
+    "lightProbeInfo": {
       "__id__": 48
+    },
+    "postSettings": {
+      "__id__": 49
     },
     "bakedWithStationaryMainLight": false,
     "bakedWithHighpLightmap": false

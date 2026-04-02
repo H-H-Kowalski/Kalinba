@@ -1,4 +1,5 @@
 import { _decorator, Component, EditBox, sys, UITransform, Label } from 'cc';
+import { getWx } from '../manager/WeChatNative';
 const { ccclass, property } = _decorator;
 
 /**
@@ -26,6 +27,9 @@ export class EditableCaption extends Component {
     @property({ tooltip: '启动时从 localStorage 读取（需 storageKey 非空）' })
     loadOnStart: boolean = true;
 
+    @property({ tooltip: '无存档时的默认标题（占位已去掉，首次进入显示此文案）' })
+    defaultCaption: string = '《生日快乐》';
+
     @property({
         tooltip:
             '每帧强制 TEXT_LABEL/占位符在框内居中。EditBox 会反复把内部 Label 改回左对齐，需常驻为 true',
@@ -44,6 +48,10 @@ export class EditableCaption extends Component {
      */
     update() {
         if (!this.keepLabelCentered || !this._eb?.isValid) return;
+        // 聚焦/弹出系统键盘时勿每帧改子 Label 坐标与尺寸，否则与微信原生输入层抢布局，易出现输入条卡屏幕中间、无法收起
+        if (typeof this._eb.isFocused === 'function' && this._eb.isFocused()) {
+            return;
+        }
         this.alignInnerLabels();
     }
 
@@ -59,15 +67,19 @@ export class EditableCaption extends Component {
 
         if (this.loadOnStart && this.storageKey) {
             const saved = sys.localStorage.getItem(this.storageKey);
-            if (saved != null && saved !== '') {
+            if (saved === null) {
+                this._eb.string = this.clamp(this.defaultCaption);
+            } else {
                 this._eb.string = this.clamp(saved);
             }
         }
 
         this._eb.node.on(EditBox.EventType.TEXT_CHANGED, this.onTextChanged, this);
         this._eb.node.on(EditBox.EventType.EDITING_DID_ENDED, this.onEditEnd, this);
+        if (EditBox.EventType.EDITING_RETURN !== undefined) {
+            this._eb.node.on(EditBox.EventType.EDITING_RETURN, this.onEditEnd, this);
+        }
     }
-
 
     /**
      * 强制把 EditBox 内文字/占位 Label 铺满输入区域并在框内水平+垂直居中。
@@ -118,6 +130,9 @@ export class EditableCaption extends Component {
         if (this._eb && this._eb.isValid) {
             this._eb.node.off(EditBox.EventType.TEXT_CHANGED, this.onTextChanged, this);
             this._eb.node.off(EditBox.EventType.EDITING_DID_ENDED, this.onEditEnd, this);
+            if (EditBox.EventType.EDITING_RETURN !== undefined) {
+                this._eb.node.off(EditBox.EventType.EDITING_RETURN, this.onEditEnd, this);
+            }
         }
     }
 
@@ -144,7 +159,22 @@ export class EditableCaption extends Component {
         if (this._eb && this.storageKey) {
             sys.localStorage.setItem(this.storageKey, this._eb.string);
         }
-        this.alignInnerLabels();
+        this.hideWechatKeyboard();
+        this.scheduleOnce(() => {
+            this.alignInnerLabels();
+        }, 0);
+    }
+
+    /** 微信小游戏：部分机型上仅失焦不会收起键盘，需显式 hideKeyboard */
+    private hideWechatKeyboard() {
+        const w = getWx() as { hideKeyboard?: (opts?: Record<string, unknown>) => void } | undefined;
+        if (w && typeof w.hideKeyboard === 'function') {
+            try {
+                w.hideKeyboard({});
+            } catch {
+                // ignore
+            }
+        }
     }
 
     /** 外部读取当前文案 */

@@ -1,4 +1,6 @@
 import { _decorator, Component, Node, AudioSource, AudioClip, UITransform, Color, Sprite, tween, Vec3, Label, instantiate } from 'cc';
+import { AudioManager } from './manager/AudioManager';
+import { vibrateKeyTap } from './manager/HapticFeedback';
 const { ccclass, property } = _decorator;
 
 @ccclass('KalimbaKey')
@@ -85,6 +87,7 @@ export class KalimbaKey extends Component {
             this.sprite.color = color;
         }
             
+        vibrateKeyTap();
         // 播放逻辑（按下即播放）
         const touchPos = event.getUILocation();
         this.playKeySound(new Vec3(touchPos.x, touchPos.y, 0));
@@ -142,14 +145,18 @@ export class KalimbaKey extends Component {
 
     private playKeySound(worldPos?: Vec3) {
         try {
-            const audioManager = (globalThis as any).AudioManager?.getInstance();
+            const audioManager = AudioManager.getInstance();
             if (audioManager) {
-                audioManager.playKeySound(this.keyIndex, worldPos);
-            } else if (this.keySound) {
+                audioManager.playKeySound(this.keyIndex, worldPos, this.keySound);
+                return;
+            }
+            if (this.keySound && this.audioSource) {
                 this.audioSource.playOneShot(this.keySound);
             }
-        } catch (error) {
-            if (this.keySound) this.audioSource.playOneShot(this.keySound);
+        } catch {
+            if (this.keySound && this.audioSource) {
+                this.audioSource.playOneShot(this.keySound);
+            }
         }
     }
 

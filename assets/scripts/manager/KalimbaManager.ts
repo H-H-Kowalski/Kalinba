@@ -1,6 +1,7 @@
 import { _decorator, Component, Node, Prefab, instantiate, Vec3, UITransform, view, Label, Color } from 'cc';
 import { KalimbaKey } from '../KalimbaKey';
 import { AudioManager } from './AudioManager';
+import { applySavedFontToSubtree } from './GlobalFontApplier';
 const { ccclass, property } = _decorator;
 
 @ccclass('KalimbaManager')
@@ -132,6 +133,7 @@ export class KalimbaManager extends Component {
 
             this.keys.push(key);
         }
+        void applySavedFontToSubtree(this.node);
     }
 
     /**

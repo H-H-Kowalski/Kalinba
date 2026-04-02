@@ -1,6 +1,7 @@
-import { _decorator, Component, Node, Button, Label, Sprite, Color, tween, Vec3, UIOpacity, director } from 'cc';
-import { RoundedRect } from '../RoundedRect';
+import { _decorator, Component, Node, Button, Label, Sprite, director } from 'cc';
 import { SceneManager } from '../manager/SceneManager';
+import { applySavedFontToSubtree } from '../manager/GlobalFontApplier';
+import { showAboutContactPanel } from './AboutContactPanel';
 const { ccclass, property } = _decorator;
 
 /** 挂在 mainscene 的 Canvas 上；开始按钮可拖入 startBtn，或留空由节点名 start_button 自动绑定 */
@@ -42,29 +43,10 @@ export class HomeScene extends Component {
 
     start() {
         this.setupButtons();
-        this.setupLabels(); // 添加这行
-        this.setupStartButtonRound(); // 设置圆角
-    }
-
-    /**
-     * 设置开始按钮圆角
-     */
-    setupStartButtonRound() {
-        if (this.startBtn) {
-            // 获取或添加RoundedRect组件
-            let roundedRect = this.startBtn.node.getComponent(RoundedRect);
-            if (!roundedRect) {
-                roundedRect = this.startBtn.node.addComponent(RoundedRect);
-            }
-            
-            // 设置为10%圆角
-            if (roundedRect) {
-                roundedRect.isPercentage = true;
-                roundedRect.radiusPercent = 0.1; // 10%
-                // 触发重绘
-                roundedRect.draw();
-            }
-        }
+        this.setupLabels();
+        this.scheduleOnce(() => {
+            void applySavedFontToSubtree(this.node);
+        }, 0);
     }
 
     /**
@@ -139,19 +121,23 @@ export class HomeScene extends Component {
     }
 
     /**
-     * 显示设置面板
+     * 进入设置场景（assets/settingscene.scene）
      */
     showSettingsPanel() {
-        // TODO: 实现设置面板
-        console.log('显示设置面板');
+        const sm = SceneManager.getInstance();
+        if (sm) {
+            sm.loadSettingsScene('home');
+        } else {
+            SceneManager.prepareSettingsReturnTarget('home');
+            director.loadScene(SceneManager.SCENE_NAMES.SETTINGS);
+        }
     }
 
     /**
-     * 显示关于面板
+     * 显示关于面板（联系方式，支持复制微信 / 邮箱）
      */
     showAboutPanel() {
-        // TODO: 实现关于面板
-        console.log('显示关于面板');
+        showAboutContactPanel(this.node);
     }
 
     onDestroy() {

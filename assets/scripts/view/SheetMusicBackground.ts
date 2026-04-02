@@ -19,6 +19,9 @@ import {
     Vec3,
 } from 'cc';
 import { chooseImagesUpTo, isWeChatMiniGame } from '../manager/ChooseImageHelper';
+import { applySavedFontToSubtree } from '../manager/GlobalFontApplier';
+import { SheetSettingsStore } from '../manager/SheetSettingsStore';
+import { SheetRuntimeStore } from '../manager/SheetRuntimeStore';
 const { ccclass, property } = _decorator;
 
 const DISPLAY_NODE = 'SheetImage';
@@ -68,8 +71,11 @@ export class SheetMusicBackground extends Component {
     @property
     swipeThresholdPx: number = 40;
 
-    @property({ type: Enum(PageTurnMode), tooltip: '翻页模式：左右滑动 / 上下滑动' })
-    pageTurnMode: PageTurnMode = PageTurnMode.HORIZONTAL;
+    @property({
+        type: Enum(PageTurnMode),
+        tooltip: '默认翻页偏好（设置页可改）；单张长图仍会强制纵向滚动',
+    })
+    pageTurnMode: PageTurnMode = PageTurnMode.VERTICAL;
 
     @property({ tooltip: '单张长图自动纵向滚动（按宽度适配，不切图）' })
     enableTallImageAutoPaging: boolean = true;
@@ -118,6 +124,10 @@ export class SheetMusicBackground extends Component {
     }
 
     start() {
+        const sheet = SheetSettingsStore.load();
+        this.pageTurnMode =
+            sheet.pageTurnMode === 1 ? PageTurnMode.VERTICAL : PageTurnMode.HORIZONTAL;
+
         this.sprite = this.findDisplaySprite();
         if (!this.sprite) {
             console.warn('[SheetMusicBackground] 需要 Sprite：应在 MaskRoot/SheetImage 子节点上');
@@ -132,6 +142,7 @@ export class SheetMusicBackground extends Component {
         this.applySpriteStretch();
         this.ensureSlidesRoot();
         this.rebuildSlides(true);
+        this.applyTallScrollForSingleBuiltInImageIfNeeded();
         if (this.sprite?.node) {
             this.sprite.node.active = false;
         }
@@ -155,6 +166,7 @@ export class SheetMusicBackground extends Component {
         this.node.on(Node.EventType.TOUCH_CANCEL, this.onTouchEnd, this);
 
         this.updateNavAndPageLabel();
+        this.syncSheetRuntimeToStore();
         this.scheduleOnce(() => this.refreshDotRowLayout(), 0);
     }
 
@@ -191,8 +203,56 @@ export class SheetMusicBackground extends Component {
         return this.getDefaultFramesForUI();
     }
 
+    /** 当前仅一张主图时的纹理：用户选图一条，或内置 defaultSpriteFrames 一条（与 carouselTextures[0] 二选一） */
+    private getPrimarySlideTexture(): Texture2D | null {
+        if (this.carouselTextures.length === 1) {
+            return this.carouselTextures[0];
+        }
+        const frames = this.getActiveFrames();
+        if (frames.length === 1 && frames[0]?.texture) {
+            return frames[0].texture as Texture2D;
+        }
+        return null;
+    }
+
+    /**
+     * 内置 defaultSpriteFrames 仅一张且为长图时：与 URL 选单张长图一致，启用纵向滚动（不写入 carouselTextures）
+     */
+    private applyTallScrollForSingleBuiltInImageIfNeeded(): void {
+        if (this.carouselTextures.length > 0) {
+            return;
+        }
+        this._singleTallScrollActive = false;
+        this._forceVerticalPaging = false;
+        if (!this.enableTallImageAutoPaging) {
+            this.updateSingleTallScrollBounds();
+            return;
+        }
+        const tex = this.getPrimarySlideTexture();
+        if (!tex) {
+            this.updateSingleTallScrollBounds();
+            return;
+        }
+        const { w, h } = this.getTextureSize(tex);
+        const contentH = (w > 0 && h > 0) ? (this.displayWidth * h / w) : 0;
+        const threshold = Math.max(1.01, this.singleImageScrollThreshold);
+        if (contentH > this.displayHeight * threshold) {
+            this._singleTallScrollActive = true;
+            this._forceVerticalPaging = true;
+            SheetSettingsStore.save({ pageTurnMode: 1 });
+        }
+        this.updateSingleTallScrollBounds();
+        this.rebuildSlides(false);
+        this.applyCurrentSlideInternal(false);
+    }
+
     private getCurrentPageTurnMode(): PageTurnMode {
         return this._forceVerticalPaging ? PageTurnMode.VERTICAL : this.pageTurnMode;
+    }
+
+    private syncSheetRuntimeToStore() {
+        const long = this._singleTallScrollActive && this.getPrimarySlideTexture() !== null;
+        SheetRuntimeStore.setLongImageActive(long);
     }
 
     private getTextureSize(tex: Texture2D): { w: number; h: number } {
@@ -237,17 +297,20 @@ export class SheetMusicBackground extends Component {
     }
 
     private updateSingleTallScrollBounds() {
-        if (!this._singleTallScrollActive || this.carouselTextures.length !== 1) {
+        const primary = this.getPrimarySlideTexture();
+        if (!this._singleTallScrollActive || !primary) {
             this._singleTallMinY = 0;
             this._singleTallMaxY = 0;
+            this.syncSheetRuntimeToStore();
             return;
         }
-        const { w, h } = this.getTextureSize(this.carouselTextures[0]);
+        const { w, h } = this.getTextureSize(primary);
         if (w <= 0 || h <= 0) {
             this._singleTallScrollActive = false;
             this._forceVerticalPaging = false;
             this._singleTallMinY = 0;
             this._singleTallMaxY = 0;
+            this.syncSheetRuntimeToStore();
             return;
         }
         const contentH = this.displayWidth * h / w;
@@ -257,15 +320,18 @@ export class SheetMusicBackground extends Component {
             this._forceVerticalPaging = false;
             this._singleTallMinY = 0;
             this._singleTallMaxY = 0;
+            this.syncSheetRuntimeToStore();
             return;
         }
         this._singleTallMinY = (this.displayHeight - contentH) * 0.5;
         this._singleTallMaxY = (contentH - this.displayHeight) * 0.5;
+        this.syncSheetRuntimeToStore();
     }
 
     private getTallVirtualPageCount(): number {
-        if (!this._singleTallScrollActive || this.carouselTextures.length !== 1) return 1;
-        const { w, h } = this.getTextureSize(this.carouselTextures[0]);
+        const primary = this.getPrimarySlideTexture();
+        if (!this._singleTallScrollActive || !primary) return 1;
+        const { w, h } = this.getTextureSize(primary);
         if (w <= 0 || h <= 0) return 1;
         const contentH = this.displayWidth * h / w;
         return Math.max(1, Math.ceil(contentH / Math.max(1, this.displayHeight)));
@@ -380,6 +446,7 @@ export class SheetMusicBackground extends Component {
                 lab.color = i === this.carouselIndex ? DOT_ACTIVE : DOT_INACTIVE;
             }
         }
+        void applySavedFontToSubtree(row);
     }
 
     private getMaskRoot(): Node | null {
@@ -455,11 +522,15 @@ export class SheetMusicBackground extends Component {
         const mask = maskRoot.getComponent(Mask) || maskRoot.addComponent(Mask);
         mask.enabled = true;
 
+        // 微信小游戏：圆角蒙版走 Graphics；浏览器 Canvas 蒙版见文件内注释块
+        this.applyGraphicsStencilMask(mask, w, h, r);
+        /* 仅 Web 预览/非微信真机时可恢复 Canvas 蒙版
         if (sys.isBrowser && typeof document !== 'undefined') {
             this.applyBrowserSpriteStencilMask(maskRoot, mask, w, h, r);
         } else {
             this.applyGraphicsStencilMask(mask, w, h, r);
         }
+        */
 
         if (this._dotRowNode && this._dotRowNode.isValid) {
             const ui = this._dotRowNode.getComponent(UITransform);
@@ -469,7 +540,7 @@ export class SheetMusicBackground extends Component {
         }
     }
 
-    /** 浏览器：Canvas 画白底圆角梯形蒙版，SPRITE_STENCIL 按 alpha 裁剪子节点（最稳） */
+    /* 微信小游戏发布：下列为浏览器 Canvas 蒙版，真机用 applyGraphicsStencilMask 即可
     private applyBrowserSpriteStencilMask(maskRoot: Node, mask: Mask, w: number, h: number, r: number) {
         if (this._maskStencilTexture) {
             this._maskStencilTexture.destroy();
@@ -496,7 +567,6 @@ export class SheetMusicBackground extends Component {
         ctx.closePath();
         ctx.fill();
 
-        // 去掉 arc 抗锯齿产生的半透明白边（底部易看成一条白线）
         this.binarizeMaskAlphaOnCanvas(ctx, canvas.width, canvas.height);
 
         const dataUrl = canvas.toDataURL('image/png');
@@ -516,7 +586,6 @@ export class SheetMusicBackground extends Component {
         });
     }
 
-    /** 蒙版 alpha 二值化：消除边缘半透明与引擎混合后的白边 */
     private binarizeMaskAlphaOnCanvas(ctx: CanvasRenderingContext2D, w: number, h: number) {
         const imageData = ctx.getImageData(0, 0, w, h);
         const d = imageData.data;
@@ -537,11 +606,12 @@ export class SheetMusicBackground extends Component {
         }
         ctx.putImageData(imageData, 0, 0);
     }
+    */
 
     private applyGraphicsStencilMask(mask: Mask, w: number, h: number, r: number) {
-        mask.alphaThreshold = 0.1;
+        // 勿写 mask.spriteFrame = null：Cocos 3.8+ 在 type≠SPRITE_STENCIL 时无内部 Sprite，对 spriteFrame 赋值（含 null）会 error 16307
         mask.type = Mask.Type.GRAPHICS_STENCIL;
-        mask.spriteFrame = null;
+        mask.alphaThreshold = 0.1;
         const g = mask.graphics;
         if (!g) {
             return;
@@ -648,9 +718,10 @@ export class SheetMusicBackground extends Component {
             if (s) s.spriteFrame = frames[i] ?? null;
             const ui = ch.getComponent(UITransform);
             if (ui) {
-                if (i === 0 && this.carouselTextures.length === 1) {
+                const primaryTex = i === 0 ? this.getPrimarySlideTexture() : null;
+                if (primaryTex) {
                     // 单图始终按原图宽高比显示（宽度贴合容器），避免被容器比例强拉伸
-                    const { w, h } = this.getTextureSize(this.carouselTextures[0]);
+                    const { w, h } = this.getTextureSize(primaryTex);
                     const contentH = (w > 0 && h > 0) ? (this.displayWidth * h / w) : this.displayHeight;
                     if (this._singleTallScrollActive) {
                         ui.setContentSize(this.displayWidth, Math.max(this.displayHeight, contentH));
@@ -815,7 +886,12 @@ export class SheetMusicBackground extends Component {
         if (this._isPickingImages) {
             return;
         }
-        if (!isWeChatMiniGame() && !sys.isBrowser) {
+        // 微信真机：wx 可能在 GameGlobal；须同时认 WECHAT_GAME
+        const isWxGame =
+            isWeChatMiniGame() ||
+            (typeof sys.Platform !== 'undefined' && sys.platform === sys.Platform.WECHAT_GAME);
+        // 若需 Creator 浏览器预览选图，可改为：if (!isWxGame && !sys.isBrowser) return;
+        if (!isWxGame) {
             console.warn('[SheetMusicBackground] 当前平台不支持选择本地图片');
             return;
         }
@@ -863,6 +939,7 @@ export class SheetMusicBackground extends Component {
         return null;
     }
 
+    /* 微信小游戏发布：blob URL 等用 loadRemote；以下为浏览器 Image 加载，仅 Web 预览用
     private createTextureFromNativeImage(nativeImage: unknown): Texture2D | null {
         try {
             const native = nativeImage as {
@@ -917,6 +994,7 @@ export class SheetMusicBackground extends Component {
             img.src = url;
         });
     }
+    */
 
     private loadImageFromUrl(url: string): Promise<Texture2D | null> {
         const exts = ['', '.png', '.jpg', '.jpeg', '.webp'];
@@ -951,10 +1029,12 @@ export class SheetMusicBackground extends Component {
                 const asset = await tryLoadOnce(ext);
                 if (asset) return asset;
             }
+            /* 微信小游戏发布：不走浏览器 Image 回退
             if (sys.isBrowser) {
                 const texFromImg = await this.loadTextureFromBrowserUrl(url);
                 if (texFromImg) return texFromImg;
             }
+            */
             return null;
         })();
     }
@@ -986,6 +1066,7 @@ export class SheetMusicBackground extends Component {
             if (this.enableTallImageAutoPaging && contentH > this.displayHeight * threshold) {
                 this._singleTallScrollActive = true;
                 this._forceVerticalPaging = true;
+                SheetSettingsStore.save({ pageTurnMode: 1 });
             }
         }
         this._carouselFrames = loaded.map((tex) => {
@@ -1056,6 +1137,7 @@ export class SheetMusicBackground extends Component {
         }
         this.carouselTextures = [];
         this.carouselIndex = 0;
+        this.syncSheetRuntimeToStore();
     }
 
     resetToDefault() {
@@ -1066,27 +1148,31 @@ export class SheetMusicBackground extends Component {
         this.clearCarouselTexturesOnly();
         this.carouselIndex = 0;
         this.rebuildSlides(true);
-        this.applyCurrentSlideInternal(false);
+        this.applyTallScrollForSingleBuiltInImageIfNeeded();
         this.updateNavAndPageLabel();
+        this.syncSheetRuntimeToStore();
     }
 
     onDestroy() {
-        if (this.selectImageButton) {
-            this.selectImageButton.node.off(Button.EventType.CLICK, this.openImagePicker, this);
+        const offBtn = (btn: Button | null, handler: () => void) => {
+            const n = btn?.node;
+            if (n && n.isValid) {
+                n.off(Button.EventType.CLICK, handler, this);
+            }
+        };
+        offBtn(this.selectImageButton, this.openImagePicker);
+        if (this.chooseImageButton?.node !== this.selectImageButton?.node) {
+            offBtn(this.chooseImageButton, this.openImagePicker);
         }
-        if (this.chooseImageButton && this.chooseImageButton.node !== this.selectImageButton?.node) {
-            this.chooseImageButton.node.off(Button.EventType.CLICK, this.openImagePicker, this);
+        offBtn(this.prevButton, this.goPrev);
+        offBtn(this.nextButton, this.goNext);
+
+        if (this.node && this.node.isValid) {
+            this.node.off(Node.EventType.TOUCH_START, this.onTouchStart, this);
+            this.node.off(Node.EventType.TOUCH_MOVE, this.onTouchMove, this);
+            this.node.off(Node.EventType.TOUCH_END, this.onTouchEnd, this);
+            this.node.off(Node.EventType.TOUCH_CANCEL, this.onTouchEnd, this);
         }
-        if (this.prevButton) {
-            this.prevButton.node.off(Button.EventType.CLICK, this.goPrev, this);
-        }
-        if (this.nextButton) {
-            this.nextButton.node.off(Button.EventType.CLICK, this.goNext, this);
-        }
-        this.node.off(Node.EventType.TOUCH_START, this.onTouchStart, this);
-        this.node.off(Node.EventType.TOUCH_MOVE, this.onTouchMove, this);
-        this.node.off(Node.EventType.TOUCH_END, this.onTouchEnd, this);
-        this.node.off(Node.EventType.TOUCH_CANCEL, this.onTouchEnd, this);
 
         if (this.blobRevoke) {
             this.blobRevoke();
