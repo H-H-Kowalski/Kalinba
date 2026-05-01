@@ -1,3 +1,4 @@
 {
-    "libVersion": "widelyUsed"
+    "libVersion": "widelyUsed",
+    "cloudfunctionRoot": "cloudfunctions/"
 }

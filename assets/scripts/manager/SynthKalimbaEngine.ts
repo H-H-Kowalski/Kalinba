@@ -42,13 +42,14 @@ export interface KalimbaSynthParams {
     transientDecaySec: number;  // 瞬态衰减
     hpHz: number;               // 高通
     lpHz: number;               // 低通
+    presetGain: number;         // 音色响度归一化系数（以 POP=1.0 为基准）
 }
 
 const DEFAULT_PARAMS: KalimbaSynthParams = {
     attackSec: 0.01,
     fastDecaySec: 0.5,
     slowDecaySec: 2.9,
-    basePeakGain: 0.78,
+    basePeakGain: 0.88,
     fastDecayLevel: 0.14,
     overtoneRatio: 2.71,
     overtonePeakGain: 0.2,
@@ -58,15 +59,19 @@ const DEFAULT_PARAMS: KalimbaSynthParams = {
     transientDecaySec: 0.05,
     hpHz: 90,
     lpHz: 7200,
+    presetGain: 1.0,
 };
 
 /** 微信 WebAudioContext 与浏览器 AudioContext 在本引擎中用法一致 */
 type WebAudioCtx = AudioContext;
 
 export class SynthKalimbaEngine {
+    private static readonly MAX_OUTPUT_GAIN = 3.75;
     private static loggedIsSupportedOnce = false;
     private audioContext: WebAudioCtx | null = null;
     private masterGain: GainNode | null = null;
+    private compressor: DynamicsCompressorNode | null = null;
+    private softLimiter: WaveShaperNode | null = null;
     private activeVoices: Set<VoiceHandle> = new Set();
     private params: KalimbaSynthParams = { ...DEFAULT_PARAMS };
     /** 仅打一次：context 创建后挂 state 变化，便于真机对照「何时 running」 */
@@ -128,9 +133,40 @@ export class SynthKalimbaEngine {
         if (!ctx) return false;
         this.audioContext = ctx;
         this.masterGain = this.audioContext.createGain();
-        this.masterGain.gain.value = 0.8;
-        // WebAudioContext.destination 为最终输出节点，见官方文档「属性 destination」
-        this.masterGain.connect(this.audioContext.destination);
+        this.masterGain.gain.value = 1;
+
+        // 优先使用压缩器做防削波；若环境不支持则回退到软限幅器，避免低音明显破音。
+        this.compressor = null;
+        this.softLimiter = null;
+        const anyCtx = this.audioContext as unknown as {
+            createDynamicsCompressor?: () => DynamicsCompressorNode;
+        };
+        if (typeof anyCtx.createDynamicsCompressor === 'function') {
+            try {
+                this.compressor = anyCtx.createDynamicsCompressor();
+                this.compressor.threshold.setValueAtTime(-18, this.audioContext.currentTime);
+                this.compressor.knee.setValueAtTime(12, this.audioContext.currentTime);
+                this.compressor.ratio.setValueAtTime(16, this.audioContext.currentTime);
+                this.compressor.attack.setValueAtTime(0.0005, this.audioContext.currentTime);
+                this.compressor.release.setValueAtTime(0.08, this.audioContext.currentTime);
+            } catch (e) {
+                this.compressor = null;
+                kalimbaAudioWarn('WebAudio', 'createDynamicsCompressor failed, fallback soft limiter', e);
+            }
+        } else {
+            kalimbaAudioWarn('WebAudio', 'DynamicsCompressor not available, fallback soft limiter');
+        }
+
+        if (this.compressor) {
+            this.masterGain.connect(this.compressor);
+            this.compressor.connect(this.audioContext.destination);
+        } else {
+            this.softLimiter = this.audioContext.createWaveShaper();
+            this.softLimiter.curve = this.buildSoftLimiterCurve(2048, 2.2);
+            this.softLimiter.oversample = '4x';
+            this.masterGain.connect(this.softLimiter);
+            this.softLimiter.connect(this.audioContext.destination);
+        }
         const sr = (ctx as { sampleRate?: number }).sampleRate;
         kalimbaAudioLog('WebAudio', 'ensureContext created', {
             source,
@@ -147,64 +183,58 @@ export class SynthKalimbaEngine {
         return true;
     }
 
+    private buildSoftLimiterCurve(samples: number, drive: number): Float32Array {
+        const n = Math.max(256, Math.floor(samples));
+        const k = Math.max(1.2, drive);
+        const curve = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+            const x = (i * 2) / (n - 1) - 1;
+            curve[i] = Math.tanh(k * x) / Math.tanh(k);
+        }
+        return curve;
+    }
+
     /**
      * 在用户触摸回调内调用：先同步调用 resume()（满足「由用户手势发起解锁」），
      * 再在其返回的 Promise 完成后执行 playKey。真机必须在 running 后再建节点，见 WebAudioContext.resume。
      */
     playKeyInUserGesture(keyIndex: number, velocity = 1.0, onDone?: (played: boolean) => void): void {
         if (keyIndex < 0 || keyIndex >= SynthKalimbaEngine.KEY_FREQ.length) {
-            kalimbaAudioLog('Gesture', 'playKeyInUserGesture invalid keyIndex', keyIndex);
             onDone?.(false);
             return;
         }
         if (!this.ensureContext() || !this.audioContext) {
-            kalimbaAudioLog('Gesture', 'playKeyInUserGesture ensureContext failed', { keyIndex });
             onDone?.(false);
             return;
         }
         const ctx = this.audioContext;
-        kalimbaAudioLog('Gesture', 'playKeyInUserGesture enter', { keyIndex, stateBefore: ctx.state });
-        /** 真机：resume 完成后 state 可能尚未变为 running，推迟到下一 macrotask 再播更稳 */
-        const scheduleFire = () => {
-            setTimeout(() => {
-                const st = this.audioContext?.state;
-                const ok = this.playKey(keyIndex, velocity);
-                kalimbaAudioLog('Gesture', 'playKey after macrotask', { keyIndex, ctxState: st, playKeyOk: ok, voices: this.getActiveVoiceCount() });
-                onDone?.(ok);
-            }, 0);
-        };
 
         if (ctx.state === 'closed') {
-            kalimbaAudioLog('Gesture', 'playKeyInUserGesture context closed', { keyIndex });
             onDone?.(false);
             return;
         }
+
+        const fireNow = () => {
+            const ok = this.playKey(keyIndex, velocity);
+            onDone?.(ok);
+        };
+
         if (ctx.state === 'running') {
-            kalimbaAudioLog('Gesture', 'branch running → scheduleFire', { keyIndex });
-            scheduleFire();
+            fireNow();
             return;
         }
 
         try {
             const ret = ctx.resume() as Promise<void> | void;
-            const resumeIsPromise = ret !== undefined && typeof (ret as Promise<void>).then === 'function';
-            kalimbaAudioLog('Gesture', 'resume()', { keyIndex, stateBeforeResume: ctx.state, resumeReturnsPromise: resumeIsPromise });
-            if (resumeIsPromise) {
+            const isPromise = ret !== undefined && typeof (ret as Promise<void>).then === 'function';
+            if (isPromise) {
                 (ret as Promise<void>)
-                    .then(() => {
-                        kalimbaAudioLog('Gesture', 'resume Promise fulfilled', { keyIndex, stateAfter: ctx.state });
-                        scheduleFire();
-                    })
-                    .catch((err) => {
-                        kalimbaAudioWarn('Gesture', 'resume Promise rejected', keyIndex, err);
-                        onDone?.(false);
-                    });
+                    .then(() => fireNow())
+                    .catch(() => onDone?.(false));
             } else {
-                kalimbaAudioLog('Gesture', 'resume sync path → scheduleFire', { keyIndex, stateAfter: ctx.state });
-                scheduleFire();
+                fireNow();
             }
-        } catch (e) {
-            console.warn('[SynthKalimbaEngine] resume() in user gesture failed', e);
+        } catch {
             onDone?.(false);
         }
     }
@@ -231,7 +261,9 @@ export class SynthKalimbaEngine {
 
     setVolume(volume: number) {
         if (!this.ensureContext() || !this.masterGain) return;
-        this.masterGain.gain.value = Math.max(0, Math.min(1, volume));
+        /** 微信小游戏 WebAudio 在真机外放上往往偏轻，主增益放宽到 250%（按需求：较原始 100% 增加 150%） */
+        const wxBoost = getWx() ? 1.28 : 1;
+        this.masterGain.gain.value = Math.max(0, Math.min(SynthKalimbaEngine.MAX_OUTPUT_GAIN, volume * wxBoost));
     }
 
     setParams(params: Partial<KalimbaSynthParams>) {
@@ -278,6 +310,8 @@ export class SynthKalimbaEngine {
         });
         const now = ctx.currentTime;
         const vel = Math.max(0.1, Math.min(1.2, velocity));
+        const pg = this.params.presetGain;
+        const freqScale = this.getFreqGainScale(frequency);
 
         // -----------------------------
         // 0) 频段整形（木质箱体 + 去浑浊）
@@ -301,7 +335,7 @@ export class SynthKalimbaEngine {
         fundamentalOsc.frequency.setValueAtTime(frequency, now);
 
         const fundamentalGain = ctx.createGain();
-        this.scheduleDualStageEnvelope(fundamentalGain.gain, now, vel);
+        this.scheduleDualStageEnvelope(fundamentalGain.gain, now, vel * pg * freqScale);
 
         fundamentalOsc.connect(fundamentalGain);
         fundamentalGain.connect(hp);
@@ -314,7 +348,7 @@ export class SynthKalimbaEngine {
         overtoneOsc.frequency.setValueAtTime(frequency * this.params.overtoneRatio, now);
 
         const overtoneGain = ctx.createGain();
-        this.scheduleOvertoneEnvelope(overtoneGain.gain, now, vel);
+        this.scheduleOvertoneEnvelope(overtoneGain.gain, now, vel * pg);
 
         overtoneOsc.connect(overtoneGain);
         overtoneGain.connect(hp);
@@ -327,7 +361,7 @@ export class SynthKalimbaEngine {
         transientOsc.frequency.setValueAtTime(Math.min(8000, frequency * this.params.transientFreqMul), now);
 
         const transientGain = ctx.createGain();
-        this.scheduleTransientEnvelope(transientGain.gain, now, vel);
+        this.scheduleTransientEnvelope(transientGain.gain, now, vel * pg);
 
         transientOsc.connect(transientGain);
         transientGain.connect(hp);
@@ -381,6 +415,15 @@ export class SynthKalimbaEngine {
 
     getActiveVoiceCount(): number {
         return this.activeVoices.size;
+    }
+
+    /**
+     * 低频增益补偿：低音区基频能量集中易过载，按频率平滑衰减。
+     * A4(440Hz)及以上 → 1.0；C4(261Hz) → ~0.77；D4(294Hz) → ~0.82
+     */
+    private getFreqGainScale(frequency: number): number {
+        if (frequency >= 440) return 1.0;
+        return Math.sqrt(frequency / 440);
     }
 
     /**

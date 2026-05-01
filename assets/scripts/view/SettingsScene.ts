@@ -3,11 +3,13 @@ import {
     Button,
     Component,
     director,
+    EditBox,
     instantiate,
     Label,
     Layout,
     Node,
     Prefab,
+    Sprite,
     UITransform,
     Widget,
 } from 'cc';
@@ -75,7 +77,7 @@ export class SettingsScene extends Component {
     @property({ tooltip: '自动创建翻页选项行时相对字体列表的 Y 偏移' })
     pageTurnRowOffsetY: number = -200;
 
-    private styleNames = ['明亮风格', '流行风格', '深沉风格', '清脆风格'];
+    private styleNames = ['明亮', '流行', '深沉', '清脆', '空灵'];
     private styleItems: SettingLabel[] = [];
     private styleItemNodes: Node[] = [];
     private fontItems: SettingLabel[] = [];
@@ -83,6 +85,8 @@ export class SettingsScene extends Component {
     private pageTurnNames = ['横向翻页', '纵向翻页'];
     private pageTurnItems: SettingLabel[] = [];
     private pageTurnItemNodes: Node[] = [];
+    @property({ type: EditBox, tooltip: '滚动速度输入框（1~100），在场景中创建 EditBox 并绑定到此属性' })
+    autoScrollSpeedEditBox: EditBox | null = null;
 
     /** 字体选项单行总宽超过此值则拆成两行 */
     private readonly FONT_LIST_MAX_ROW_WIDTH = 900;
@@ -110,6 +114,7 @@ export class SettingsScene extends Component {
         this.buildFontList();
         this.ensurePageTurnRoot();
         this.buildPageTurnList();
+        this.initAutoScrollSpeedEditBox();
         void applySavedFontToSubtree(this.node);
     }
 
@@ -128,7 +133,7 @@ export class SettingsScene extends Component {
                 label.string = '音源: 合成API(固定)';
             }
         }
-        const names = ['明亮风格', '流行风格', '深沉风格', '清脆风格'];
+        const names = this.styleNames;
         if (this.synthStyleLabel) {
             this.synthStyleLabel.string = `音色: ${names[preset] ?? '流行'}`;
         }
@@ -353,6 +358,14 @@ export class SettingsScene extends Component {
         rootLay.updateLayout(true);
     }
 
+    private initAutoScrollSpeedEditBox() {
+        const eb = this.autoScrollSpeedEditBox;
+        if (!eb) return;
+        eb.string = String(SheetSettingsStore.load().autoScrollSpeed);
+        eb.node.on('text-changed', this.onAutoScrollSpeedChanged, this);
+        eb.node.on('editing-did-ended', this.onAutoScrollSpeedEditEnd, this);
+    }
+
     private refreshPageTurnList(selected: number) {
         if (this.pageTurnItems.length > 0) {
             for (let i = 0; i < this.pageTurnItems.length; i++) {
@@ -379,6 +392,30 @@ export class SettingsScene extends Component {
         }
         SheetSettingsStore.save({ pageTurnMode: next });
         this.refreshPageTurnList(next);
+    }
+
+    private onAutoScrollSpeedChanged() {
+        const eb = this.autoScrollSpeedEditBox;
+        if (!eb) return;
+        const raw = eb.string.replace(/[^0-9]/g, '');
+        let val = parseInt(raw, 10);
+        if (isNaN(val)) {
+            eb.string = '';
+            return;
+        }
+        if (val > 100) val = 100;
+        const clamped = String(val);
+        if (eb.string !== clamped) eb.string = clamped;
+    }
+
+    private onAutoScrollSpeedEditEnd() {
+        const eb = this.autoScrollSpeedEditBox;
+        if (!eb) return;
+        let val = parseInt(eb.string, 10);
+        if (isNaN(val) || val < 0) val = 0;
+        if (val > 100) val = 100;
+        eb.string = String(val);
+        SheetSettingsStore.save({ autoScrollSpeed: val });
     }
 
     /** 总宽超过一行上限时，第一行尽量放满（贪心），其余放第二行 */
@@ -625,6 +662,9 @@ export class SettingsScene extends Component {
         this.updateSynthLabels(true, d.synthStylePreset);
         this.buildFontList();
         this.buildPageTurnList();
+        if (this.autoScrollSpeedEditBox) {
+            this.autoScrollSpeedEditBox.string = String(SheetSettingsStore.defaultSnapshot().autoScrollSpeed);
+        }
         void applySavedFontToSubtree(this.node);
     }
 
@@ -684,6 +724,10 @@ export class SettingsScene extends Component {
                 ?? n.getComponentInChildren(UITransform)?.node
                 ?? n;
             touchNode.off(Button.EventType.CLICK);
+        }
+        if (this.autoScrollSpeedEditBox?.node?.isValid) {
+            this.autoScrollSpeedEditBox.node.off('text-changed', this.onAutoScrollSpeedChanged, this);
+            this.autoScrollSpeedEditBox.node.off('editing-did-ended', this.onAutoScrollSpeedEditEnd, this);
         }
     }
 }

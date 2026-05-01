@@ -53,12 +53,19 @@ function applySystemToLabel(lab: Label) {
     lab.font = null;
 }
 
+/** 图标节点（常用字体图标）不参与全局字体替换，避免返回场景后 icon 变形/乱码 */
+function shouldSkipFontApplySubtree(n: Node): boolean {
+    const name = (n?.name || '').toLowerCase();
+    return name.includes('icon') || name.includes('nofont');
+}
+
 /** 子树内全部 Label / EditBox 内嵌字用系统默认字体 */
 export function applySystemFontToSubtree(root: Node): void {
     if (!root?.isValid) return;
     const stack: Node[] = [root];
     while (stack.length) {
         const n = stack.pop()!;
+        if (shouldSkipFontApplySubtree(n)) continue;
         const labels = n.getComponents(Label);
         for (const lab of labels) {
             applySystemToLabel(lab);
@@ -80,6 +87,7 @@ export function applyFontToSubtree(root: Node, font: Font): void {
     const stack: Node[] = [root];
     while (stack.length) {
         const n = stack.pop()!;
+        if (shouldSkipFontApplySubtree(n)) continue;
         const labels = n.getComponents(Label);
         for (const lab of labels) {
             applyToLabel(lab, font);
@@ -97,16 +105,7 @@ export function applyFontToSubtree(root: Node, font: Font): void {
 
 /** 按当前存档字体应用到整棵 UI 子树（异步加载字体资源） */
 export async function applySavedFontToSubtree(root: Node): Promise<void> {
-    if (!root?.isValid) return;
-    const idx = FontSettingsStore.load().fontIndex;
-    if (isSystemFontIndex(idx)) {
-        invalidateFontCache();
-        cachedIndex = idx;
-        cachedFont = null;
-        applySystemFontToSubtree(root);
-        return;
-    }
-    const font = await loadFontForIndex(idx);
-    if (!font) return;
-    applyFontToSubtree(root, font);
+    // 当前版本已不支持运行时换字体：保留 API 兼容调用点，但不再改动任何 Label。
+    void root;
+    return;
 }

@@ -3,8 +3,8 @@ import type { AudioManager } from './AudioManager';
 
 const KEY = 'kalinba_audio_settings_v1';
 
-/** 应用内主输出增益 0~1，默认约 85%（最终听感仍随系统音量变化；微信/WebAudio 上 50% 往往偏轻） */
-export const DEFAULT_APP_GAIN = 0.85;
+/** 应用内主输出增益：默认提升到 250%（较原始 100% 增加 150%） */
+export const DEFAULT_APP_GAIN = 3.75;
 
 export interface AudioSettingsSnapshot {
     useSynth: boolean;
@@ -30,7 +30,7 @@ export class AudioSettingsStore {
             return {
                 useSynth: typeof o.useSynth === 'boolean' ? o.useSynth : d.useSynth,
                 synthStylePreset:
-                    typeof o.synthStylePreset === 'number' && o.synthStylePreset >= 0 && o.synthStylePreset <= 3
+                    typeof o.synthStylePreset === 'number' && o.synthStylePreset >= 0 && o.synthStylePreset <= 4
                         ? Math.floor(o.synthStylePreset)
                         : d.synthStylePreset,
                 useManualSynthTuning:

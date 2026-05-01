@@ -2,6 +2,7 @@ import { _decorator, Component, Node, Button, Label, Sprite, director } from 'cc
 import { SceneManager } from '../manager/SceneManager';
 import { applySavedFontToSubtree } from '../manager/GlobalFontApplier';
 import { showAboutContactPanel } from './AboutContactPanel';
+import { installShareLaunchCapture } from '../manager/PerformanceShareLaunch';
 const { ccclass, property } = _decorator;
 
 /** 挂在 mainscene 的 Canvas 上；开始按钮可拖入 startBtn，或留空由节点名 start_button 自动绑定 */
@@ -26,6 +27,7 @@ export class HomeScene extends Component {
     logoNode: Node = null;  // Logo节点
 
     onLoad() {
+        installShareLaunchCapture();
         this.bindStartButtonIfNeeded();
     }
 

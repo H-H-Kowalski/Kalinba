@@ -1,0 +1,244 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>计算机软件著作权登记申请报告</title>
+<!--[if gte mso 9]>
+<xml>
+  <w:WordDocument>
+    <w:View>Print</w:View>
+    <w:Zoom>100</w:Zoom>
+    <w:DoNotOptimizeForBrowser/>
+  </w:WordDocument>
+</xml>
+<![endif]-->
+<style>
+  @page {
+    size: A4;
+    margin: 2.54cm 3.17cm 2.54cm 3.17cm;
+  }
+  body {
+    font-family: '宋体', SimSun, 'Microsoft YaHei', serif;
+    font-size: 10.5pt;
+    line-height: 1.6;
+    color: #000;
+  }
+  h1 { font-family: '黑体', SimHei, sans-serif; }
+  h2 { font-family: '黑体', SimHei, sans-serif; }
+  h3 { font-family: '黑体', SimHei, sans-serif; }
+  table { font-size: 10pt; }
+  pre { page-break-inside: auto; }
+  code { font-family: Consolas, 'Courier New', monospace; }
+</style>
+</head>
+<body>
+<h1 style="font-size:18pt; margin-top:24px; margin-bottom:8px; page-break-after:avoid;">计算机软件著作权登记申请报告</h1>
+<h2 style="font-size:15pt; margin-top:24px; margin-bottom:8px; page-break-after:avoid;">一、软件基本信息</h2>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">软件全称：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">拇指琴演奏家软件V1.0</code></li>
+<li style="margin:3px 0;">软件简称：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">拇指琴演奏家</code></li>
+<li style="margin:3px 0;">版本号：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">V1.0</code></li>
+<li style="margin:3px 0;">申请主体类型：个人</li>
+<li style="margin:3px 0;">软件类型：移动端互动娱乐软件（微信小游戏）</li>
+<li style="margin:3px 0;">开发工具：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">Cocos Creator 3.8.6</code></li>
+<li style="margin:3px 0;">主要开发语言：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">TypeScript</code></li>
+<li style="margin:3px 0;">源代码行数：约 5600 行（34 个 TypeScript 源文件）</li>
+<li style="margin:3px 0;">目标平台：微信小游戏运行环境（含 WebAudio 能力与微信云开发能力）</li>
+</ul>
+<h2 style="font-size:15pt; margin-top:24px; margin-bottom:8px; page-break-after:avoid;">二、开发背景与目的</h2>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">本软件面向拇指琴（Kalimba）爱好者与普通用户，提供轻量化、低门槛的移动端演奏体验。用户可在微信小游戏中进行琴键触控演奏、切换音色风格、查看/切换曲谱并进行个性化设置。  </p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">项目目标如下：</p>
+<ol style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">提供稳定的多键触控演奏体验；</li>
+<li style="margin:3px 0;">在微信小游戏环境中实现低延迟、可调音色的合成发声；</li>
+<li style="margin:3px 0;">支持曲谱显示与翻页模式，适配长图曲谱场景；</li>
+<li style="margin:3px 0;">支持基础设置持久化，便于跨场景与下次启动恢复；</li>
+<li style="margin:3px 0;">提供演奏录制、回放与社交分享能力，通过微信云开发实现演奏数据的云端存取与好友间传播。</li>
+</ol>
+<h2 style="font-size:15pt; margin-top:24px; margin-bottom:8px; page-break-after:avoid;">三、软件功能概述</h2>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">3.1 主页与场景切换</h3>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">提供首页、演奏页、设置页等界面。</li>
+<li style="margin:3px 0;">支持场景间状态流转与返回逻辑管理。</li>
+</ul>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">3.2 卡林巴琴键交互</h3>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">17 键映射与触控事件处理；</li>
+<li style="margin:3px 0;">按下/抬起视觉反馈；</li>
+<li style="margin:3px 0;">并发触控下的发声与触觉反馈控制。</li>
+</ul>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">3.3 音频播放与合成引擎</h3>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">采用 <code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">SynthKalimbaEngine</code> 进行 WebAudio 合成发声；</li>
+<li style="margin:3px 0;">通过 <code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">AudioManager</code> 管理播放入口、音量、预设参数与兜底策略；</li>
+<li style="margin:3px 0;">支持多种音色风格（如明亮、流行、深沉、清脆）；</li>
+<li style="margin:3px 0;">在不支持合成时可回退到采样播放方案；</li>
+<li style="margin:3px 0;">提供音频调试日志开关，便于真机排查。</li>
+</ul>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">3.4 曲谱显示与翻页</h3>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">支持默认曲谱显示与用户自定义选图；</li>
+<li style="margin:3px 0;">支持横向/纵向翻页偏好；</li>
+<li style="margin:3px 0;">针对单张长图支持纵向滚动与分页体验优化；</li>
+<li style="margin:3px 0;">支持页码、指示点、上一页/下一页导航。</li>
+</ul>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">3.5 设置与持久化</h3>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">音频设置存储（音色、音量、参数模式）；</li>
+<li style="margin:3px 0;">曲谱翻页偏好存储；</li>
+<li style="margin:3px 0;">字体与文案等展示配置管理；</li>
+<li style="margin:3px 0;">运行时状态同步与跨场景恢复。</li>
+</ul>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">3.6 演奏录制与回放</h3>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">支持在弹奏过程中实时录制琴键事件（时间戳 + 键位索引），最长 3 分钟、最多 6000 个音符事件；</li>
+<li style="margin:3px 0;">录制完成后可立即回放，系统按时间序列自动触发各琴键发声并呈现按压视觉反馈；</li>
+<li style="margin:3px 0;">回放期间琴键区域自动锁定，防止用户误操作干扰回放。</li>
+</ul>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">3.7 演奏分享</h3>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">将录制数据编码后通过微信云函数上传至云端数据库；</li>
+<li style="margin:3px 0;">上传成功后自动拉起微信分享面板，生成带参数的分享卡片；</li>
+<li style="margin:3px 0;">好友点击分享卡片进入本软件后，自动从云端下载演奏数据并立即开始回放；</li>
+<li style="margin:3px 0;">支持启动参数与 onShow 参数双通道捕获，确保冷启动与热切换场景均可正确消费分享数据。</li>
+</ul>
+<h2 style="font-size:15pt; margin-top:24px; margin-bottom:8px; page-break-after:avoid;">四、系统架构与技术实现</h2>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">4.1 总体架构</h3>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">软件采用组件化脚本架构，按“视图层 + 管理层 + 存储层”组织：</p>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">视图层：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">assets/scripts/view/</code>  </li>
+</ul>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  负责 UI 展示、交互事件和界面状态刷新。</p>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">管理层：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">assets/scripts/manager/</code>  </li>
+</ul>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  负责音频引擎、资源管理、场景管理、平台适配与设置管理。</p>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">交互节点脚本：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">assets/scripts/KalimbaKey.ts</code> 等  </li>
+</ul>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  负责具体琴键行为与事件响应。</p>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">4.2 关键模块</h3>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">音频合成模块：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">SynthKalimbaEngine.ts</code></li>
+</ul>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 初始化/维护 WebAudioContext；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 按键频率映射、包络与泛音建模；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 用户手势触发播放与 <code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">resume</code> 时序控制。</p>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">音频管理模块：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">AudioManager.ts</code></li>
+</ul>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 统一音频播放入口；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 合成与采样兜底切换；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 音色预设参数下发与音量控制；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 运行日志与状态观测。</p>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">曲谱显示模块：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">SheetMusicBackground.ts</code></li>
+</ul>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 曲谱资源加载、轮播、翻页与长图滚动；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 翻页模式策略与运行时状态同步。</p>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">设置存储模块：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">AudioSettingsStore.ts</code>、<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">SheetSettingsStore.ts</code>、<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">FontSettingsStore.ts</code></li>
+</ul>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 本地存储读写；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 默认值、合法性校验与恢复。</p>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">演奏录制模块：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">PerformanceRecorder.ts</code>、<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">PerformanceTypes.ts</code></li>
+</ul>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 实时记录琴键按压事件（毫秒级时间戳 + 键位索引）；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 录制时长与事件数上限控制；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 数据校验、JSON 编码与解码；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 体积上限保护（128KB）。</p>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">演奏回放模块：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">PerformancePlayer.ts</code></li>
+</ul>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 基于 setTimeout 的时间序列调度；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 按记录时刻逐一触发 AudioManager 发声并驱动琴键视觉反馈；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 回放结束自动清理定时器与状态。</p>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">云端存取模块：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">PerformanceCloudService.ts</code></li>
+</ul>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 封装 <code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">wx.cloud.callFunction</code> 调用；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 创建记录（<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">createPerformanceRecord</code> 云函数）；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 查询记录（<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">getPerformanceRecord</code> 云函数）。</p>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">分享落地模块：<code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">PerformanceShareLaunch.ts</code></li>
+</ul>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 初始化微信云开发环境；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 捕获启动参数与 <code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">onShow</code> 参数中的记录 ID；</p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">  - 通过 localStorage 暂存待消费的分享记录 ID。</p>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">4.3 云端服务</h3>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">本软件使用微信云开发（CloudBase）实现演奏数据的云端存取，相关云函数部署于微信云端：</p>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;"><code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">createPerformanceRecord</code>：接收编码后的演奏数据并写入云数据库，返回唯一记录 ID。</li>
+<li style="margin:3px 0;"><code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">getPerformanceRecord</code>：根据记录 ID 查询演奏数据并返回给客户端。</li>
+<li style="margin:3px 0;"><code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">cleanupPerformanceRecords</code>：定时清理过期的演奏记录，控制存储量。</li>
+</ul>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">4.4 平台适配</h3>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">微信环境能力通过 <code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">WeChatNative.ts</code> 封装访问；</li>
+<li style="margin:3px 0;">采用微信小游戏 <code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">WebAudioContext</code> 能力进行发声；</li>
+<li style="margin:3px 0;">适配震动、选图、剪贴板等微信原生接口；</li>
+<li style="margin:3px 0;">微信云开发 SDK 初始化与云函数调用封装；</li>
+<li style="margin:3px 0;">分享卡片参数携带与解析；</li>
+<li style="margin:3px 0;">对非支持环境提供能力检测和兜底处理。</li>
+</ul>
+<h2 style="font-size:15pt; margin-top:24px; margin-bottom:8px; page-break-after:avoid;">五、运行环境</h2>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">开发系统：Windows 10</li>
+<li style="margin:3px 0;">开发工具：Cocos Creator 3.8.6</li>
+<li style="margin:3px 0;">开发语言：TypeScript</li>
+<li style="margin:3px 0;">运行平台：微信小游戏</li>
+<li style="margin:3px 0;">建议设备：支持音频播放与触控操作的智能手机</li>
+</ul>
+<h2 style="font-size:15pt; margin-top:24px; margin-bottom:8px; page-break-after:avoid;">六、测试与验证情况</h2>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">6.1 功能测试</h3>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">琴键触控触发发声正常；</li>
+<li style="margin:3px 0;">多键连续触发可响应；</li>
+<li style="margin:3px 0;">音色风格切换后参数生效；</li>
+<li style="margin:3px 0;">曲谱翻页及长图纵向模式可用；</li>
+<li style="margin:3px 0;">设置项在重启后可恢复；</li>
+<li style="margin:3px 0;">录制/停止/回放流程正常，回放时琴键视觉同步；</li>
+<li style="margin:3px 0;">分享上传成功且好友可正常接收回放。</li>
+</ul>
+<h3 style="font-size:13pt; margin-top:16px; margin-bottom:6px;">6.2 真机专项验证</h3>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">验证微信真机环境下 WebAudioContext 状态切换；</li>
+<li style="margin:3px 0;">验证用户手势触发与 <code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">resume</code> 后播放时序；</li>
+<li style="margin:3px 0;">增加音频调试日志用于无声/小声问题定位；</li>
+<li style="margin:3px 0;">调整部分音色参数以改善真机听感音量差异；</li>
+<li style="margin:3px 0;">验证云函数调用在真机环境下的稳定性与延迟表现；</li>
+<li style="margin:3px 0;">验证分享链接在冷启动与热切换场景下的参数传递正确性。</li>
+</ul>
+<h2 style="font-size:15pt; margin-top:24px; margin-bottom:8px; page-break-after:avoid;">七、创新点与技术特点</h2>
+<ol style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">在小游戏环境下实现了面向卡林巴音色的轻量级 WebAudio 合成播放方案，通过振荡器频率映射、双段包络建模与非谐泛音叠加，在不依赖任何外部音频采样的前提下还原拇指琴音色；</li>
+<li style="margin:3px 0;">建立了真机导向的 WebAudio 状态诊断日志机制，提升问题定位效率；</li>
+<li style="margin:3px 0;">针对单张长图曲谱场景实现纵向滚动与分页联动策略；</li>
+<li style="margin:3px 0;">采用模块化配置与存储机制，便于后续扩展与维护；</li>
+<li style="margin:3px 0;">实现了完整的「录制 → 编码 → 云端存储 → 分享传播 → 落地回放」闭环，利用微信云函数与启动参数机制完成演奏数据的跨用户传递与自动消费；</li>
+<li style="margin:3px 0;">录制回放采用毫秒精度时间戳调度与琴键视觉同步驱动，还原弹奏过程。</li>
+</ol>
+<h2 style="font-size:15pt; margin-top:24px; margin-bottom:8px; page-break-after:avoid;">八、结论</h2>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;"><code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">拇指琴演奏家软件V1.0</code> 已完成主要功能开发与集成，具备稳定的卡林巴演奏交互、音频合成播放、曲谱展示、演奏录制回放与社交分享能力，并适配微信小游戏运行环境。  </p>
+<p style="font-size:10.5pt; line-height:1.6; margin:4px 0; text-indent:0;">软件结构清晰、功能完整，具备申请计算机软件著作权登记的基础条件。</p>
+<h2 style="font-size:15pt; margin-top:24px; margin-bottom:8px; page-break-after:avoid;">九、申请信息（提交前补全）</h2>
+<ul style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">著作权人（个人姓名）：胡浩琨</li>
+<li style="margin:3px 0;">证件类型及号码（按登记表要求填写）：身份证 370102199909190313</li>
+<li style="margin:3px 0;">开发完成日期（YYYY-MM-DD）：2026-03-30</li>
+<li style="margin:3px 0;">首次发表日期（如有，YYYY-MM-DD）：</li>
+<li style="margin:3px 0;">版本号（提交口径，如 <code style="background:#f5f5f5; padding:1px 4px; font-family:Consolas,monospace; font-size:10pt;">V1.0</code>）：V1.0</li>
+<li style="margin:3px 0;">联系电话：16675656392</li>
+<li style="margin:3px 0;">电子邮箱：1617105836@qq.com</li>
+</ul>
+<h2 style="font-size:15pt; margin-top:24px; margin-bottom:8px; page-break-after:avoid;">十、个人主体提交口径建议</h2>
+<ol style="margin:6px 0; padding-left:28px;">
+<li style="margin:3px 0;">软件全称统一为：拇指琴演奏家软件V1.0；</li>
+<li style="margin:3px 0;">报告中的“著作权人”与登记表保持完全一致（姓名、标点、空格）；</li>
+<li style="margin:3px 0;">本软件为独立开发完成，与本报告表述一致；</li>
+<li style="margin:3px 0;">版本号、完成日期、首次发表日期在各材料中保持一致，避免退回补正。</li>
+</ol>
+</body>
+</html>

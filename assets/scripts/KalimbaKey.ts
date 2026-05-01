@@ -1,10 +1,13 @@
-import { _decorator, Component, Node, AudioSource, AudioClip, UITransform, Color, Sprite, tween, Vec3, Label, instantiate } from 'cc';
+import { _decorator, Component, Node, AudioSource, AudioClip, UITransform, Color, Sprite, tween, Tween, Vec3, Label, instantiate } from 'cc';
 import { AudioManager } from './manager/AudioManager';
 import { vibrateKeyTap } from './manager/HapticFeedback';
+import { PerformanceRecorder } from './manager/PerformanceRecorder';
 const { ccclass, property } = _decorator;
 
 @ccclass('KalimbaKey')
 export class KalimbaKey extends Component {
+    private static keyRegistry: Map<number, KalimbaKey> = new Map();
+
     @property
     keyIndex: number = 0;  // 琴键编号（0-16）
 
@@ -33,10 +36,17 @@ export class KalimbaKey extends Component {
     private audioSource: AudioSource = null;
     private sprite: Sprite = null;
     private isPressed: boolean = false;
+    private replayVisualToken = 0;
+    private defaultScale: Vec3 = new Vec3(1, 1, 1);
+
+    static getByIndex(index: number): KalimbaKey | null {
+        return KalimbaKey.keyRegistry.get(index) ?? null;
+    }
 
     start() {
         this.audioSource = this.getComponent(AudioSource) || this.addComponent(AudioSource);
         this.sprite = this.getComponent(Sprite) || this.addComponent(Sprite);
+        this.defaultScale = this.node.getScale().clone();
         
         // 尝试自动获取 Label
         if (!this.noteLabel) {
@@ -66,6 +76,7 @@ export class KalimbaKey extends Component {
         }
         
         this.updateNoteDisplay();
+        KalimbaKey.keyRegistry.set(this.keyIndex, this);
 
         // 注册触摸事件
         this.node.on(Node.EventType.TOUCH_START, this.onTouchStart, this);
@@ -77,18 +88,15 @@ export class KalimbaKey extends Component {
      * 按下：变透明(50%)、播放
      */
     onTouchStart(event: any) {
-        if (this.isPressed) return;
         this.isPressed = true;
         
-        // 视觉反馈：变透明
         if (this.sprite) {
             const color = this.sprite.color.clone();
-            color.a = 128; // 50% 透明度
+            color.a = 128;
             this.sprite.color = color;
         }
             
         vibrateKeyTap();
-        // 播放逻辑（按下即播放）
         const touchPos = event.getUILocation();
         this.playKeySound(new Vec3(touchPos.x, touchPos.y, 0));
     }
@@ -99,13 +107,7 @@ export class KalimbaKey extends Component {
     onTouchEnd() {
         if (!this.isPressed) return;
         this.isPressed = false;
-        
-        // 恢复不透明
-        if (this.sprite) {
-            const color = this.sprite.color.clone();
-            color.a = 255; // 100% 不透明
-            this.sprite.color = color;
-        }
+        this.applyPressedVisual(false);
     }
 
     updateNoteDisplay() {
@@ -139,14 +141,51 @@ export class KalimbaKey extends Component {
     }
     
     setKeyIndex(index: number) {
+        KalimbaKey.keyRegistry.delete(this.keyIndex);
         this.keyIndex = index;
         this.updateNoteDisplay();
+        KalimbaKey.keyRegistry.set(this.keyIndex, this);
+    }
+
+    /** 回放时的按键视觉反馈：短暂按下再抬起 */
+    playReplayPress(durationMs = 85): void {
+        this.replayVisualToken += 1;
+        const token = this.replayVisualToken;
+        this.applyPressedVisual(true);
+        this.playReplayPulse();
+        const sec = Math.max(0.03, durationMs / 1000);
+        this.scheduleOnce(() => {
+            if (token !== this.replayVisualToken) return;
+            if (this.isPressed) return;
+            this.applyPressedVisual(false);
+        }, sec);
+    }
+
+    /** 回放点击指示：短促按压缩放，再回到原尺寸 */
+    private playReplayPulse(): void {
+        Tween.stopAllByTarget(this.node);
+        const sx = this.defaultScale.x;
+        const sy = this.defaultScale.y;
+        const sz = this.defaultScale.z;
+        this.node.setScale(sx, sy, sz);
+        tween(this.node)
+            .to(0.05, { scale: new Vec3(sx * 0.95, sy * 0.95, sz) })
+            .to(0.06, { scale: new Vec3(sx, sy, sz) })
+            .start();
+    }
+
+    private applyPressedVisual(pressed: boolean) {
+        if (!this.sprite) return;
+        const color = this.sprite.color.clone();
+        color.a = pressed ? 128 : 255;
+        this.sprite.color = color;
     }
 
     private playKeySound(worldPos?: Vec3) {
         try {
             const audioManager = AudioManager.getInstance();
             if (audioManager) {
+                PerformanceRecorder.recordKey(this.keyIndex);
                 audioManager.playKeySound(this.keyIndex, worldPos, this.keySound);
                 return;
             }
@@ -161,6 +200,7 @@ export class KalimbaKey extends Component {
     }
 
     onDestroy() {
+        KalimbaKey.keyRegistry.delete(this.keyIndex);
         this.node.off(Node.EventType.TOUCH_START, this.onTouchStart, this);
         this.node.off(Node.EventType.TOUCH_END, this.onTouchEnd, this);
         this.node.off(Node.EventType.TOUCH_CANCEL, this.onTouchEnd, this);

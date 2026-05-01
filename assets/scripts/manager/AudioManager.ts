@@ -11,11 +11,13 @@ enum SynthStylePreset {
     POP = 1,      // 流行
     DEEP = 2,     // 深沉
     CRISP = 3,    // 清脆
+    AMBIENT = 4,  // 空灵
 }
 
 @ccclass('AudioManager')
 export class AudioManager extends Component {
     private static instance: AudioManager = null;
+    private static readonly MAX_OUTPUT_GAIN = 3.75;
     
     @property([AudioClip])
     keySounds: AudioClip[] = [];
@@ -29,7 +31,7 @@ export class AudioManager extends Component {
     @property
     useSynth: boolean = true; // 固定使用 WebAudio 合成音（无需本地 mp3）
 
-    @property({ type: Enum(SynthStylePreset), tooltip: '合成音色档位：明亮 / 流行 / 深沉 / 清脆' })
+    @property({ type: Enum(SynthStylePreset), tooltip: '合成音色档位：明亮 / 流行 / 深沉 / 清脆 / 空灵' })
     synthStylePreset: SynthStylePreset = SynthStylePreset.POP;
 
     @property({ tooltip: '开启后才使用下面的手动参数；关闭时按音色档位自动套参数' })
@@ -43,7 +45,7 @@ export class AudioManager extends Component {
     @property({ tooltip: '慢衰结束(秒)' })
     synthSlowDecaySec: number = 2.9;
     @property({ tooltip: '主体峰值音量(0~1)' })
-    synthBasePeakGain: number = 0.78;
+    synthBasePeakGain: number = 0.88;
     @property({ tooltip: '快衰后电平(0~1)' })
     synthFastDecayLevel: number = 0.14;
     @property({ tooltip: '非整数泛音倍频，如 2.71' })
@@ -256,10 +258,10 @@ export class AudioManager extends Component {
     
     /**
      * 设置音量
-     * @param volume 音量 (0.0 - 1.0)
+     * @param volume 音量 (0.0 - 2.5)
      */
     setVolume(volume: number) {
-        const vol = Math.max(0, Math.min(1, volume));
+        const vol = Math.max(0, Math.min(AudioManager.MAX_OUTPUT_GAIN, volume));
         this.audioSource.volume = vol;
         for (const source of this.audioSources) {
             source.volume = vol;
@@ -303,13 +305,13 @@ export class AudioManager extends Component {
     }
 
     setSynthStylePreset(preset: number) {
-        const p = Math.max(0, Math.min(3, Math.floor(preset)));
+        const p = Math.max(0, Math.min(4, Math.floor(preset)));
         this.synthStylePreset = p as SynthStylePreset;
         this.applySynthParams();
     }
 
     cycleSynthStylePreset() {
-        const next = (this.synthStylePreset + 1) % 4;
+        const next = (this.synthStylePreset + 1) % 5;
         this.setSynthStylePreset(next);
     }
 
@@ -324,14 +326,16 @@ export class AudioManager extends Component {
     getSynthStyleName(): string {
         switch (this.synthStylePreset) {
             case SynthStylePreset.BRIGHT:
-                return '明亮风格';
+                return '明亮';
             case SynthStylePreset.DEEP:
-                return '深沉风格';
+                return '深沉';
             case SynthStylePreset.CRISP:
-                return '清脆风格';
+                return '清脆';
+            case SynthStylePreset.AMBIENT:
+                return '空灵';
             case SynthStylePreset.POP:
             default:
-                return '流行风格';
+                return '流行';
         }
     }
 
@@ -352,6 +356,7 @@ export class AudioManager extends Component {
             transientDecaySec: this.synthTransientDecaySec,
             hpHz: this.synthHpHz,
             lpHz: this.synthLpHz,
+            presetGain: 1.0,
         };
 
         if (!this.useManualSynthTuning) {
@@ -362,52 +367,53 @@ export class AudioManager extends Component {
                         attackSec: 0.005,
                         fastDecaySec: 0.30,
                         slowDecaySec: 1.55,
-                        basePeakGain: 0.64,
-                        fastDecayLevel: 0.10,
+                        basePeakGain: 0.72,
+                        fastDecayLevel: 0.12,
                         overtoneRatio: 3.08,
-                        overtonePeakGain: 0.32,
+                        overtonePeakGain: 0.31,
                         overtoneDecaySec: 0.22,
                         transientFreqMul: 11.4,
-                        transientPeakGain: 0.16,
+                        transientPeakGain: 0.12,
                         transientDecaySec: 0.020,
                         hpHz: 170,
                         lpHz: 9200,
+                        presetGain: 1.02,
                     };
                     break;
                 case SynthStylePreset.DEEP:
-                    // 真机扬声器低频弱：能量若在过低频 + 低通过窄，听感会明显偏小；略开高频与泛音/瞬态作响度补偿
                     p = {
                         attackSec: 0.014,
                         fastDecaySec: 0.82,
                         slowDecaySec: 4.60,
-                        basePeakGain: 0.93,
-                        fastDecayLevel: 0.24,
+                        basePeakGain: 0.96,
+                        fastDecayLevel: 0.26,
                         overtoneRatio: 2.36,
-                        overtonePeakGain: 0.12,
+                        overtonePeakGain: 0.14,
                         overtoneDecaySec: 0.65,
                         transientFreqMul: 6.4,
-                        transientPeakGain: 0.065,
+                        transientPeakGain: 0.085,
                         transientDecaySec: 0.060,
                         hpHz: 45,
                         lpHz: 5800,
+                        presetGain: 0.82,
                     };
                     break;
                 case SynthStylePreset.CRISP:
-                    // 原 basePeakGain 偏低 + 高通偏狠，手机外放体感偏小；略提主体与低频段保留
                     p = {
                         attackSec: 0.0035,
                         fastDecaySec: 0.20,
                         slowDecaySec: 1.05,
-                        basePeakGain: 0.76,
-                        fastDecayLevel: 0.10,
+                        basePeakGain: 0.80,
+                        fastDecayLevel: 0.12,
                         overtoneRatio: 3.31,
-                        overtonePeakGain: 0.38,
+                        overtonePeakGain: 0.32,
                         overtoneDecaySec: 0.16,
                         transientFreqMul: 13.2,
-                        transientPeakGain: 0.18,
+                        transientPeakGain: 0.13,
                         transientDecaySec: 0.014,
                         hpHz: 195,
                         lpHz: 10800,
+                        presetGain: 0.88,
                     };
                     break;
                 case SynthStylePreset.POP:
@@ -416,16 +422,35 @@ export class AudioManager extends Component {
                         attackSec: 0.009,
                         fastDecaySec: 0.48,
                         slowDecaySec: 2.45,
-                        basePeakGain: 0.74,
-                        fastDecayLevel: 0.14,
+                        basePeakGain: 0.86,
+                        fastDecayLevel: 0.16,
                         overtoneRatio: 2.71,
-                        overtonePeakGain: 0.17,
+                        overtonePeakGain: 0.20,
                         overtoneDecaySec: 0.36,
                         transientFreqMul: 8.6,
                         transientPeakGain: 0.09,
                         transientDecaySec: 0.032,
                         hpHz: 95,
                         lpHz: 6200,
+                        presetGain: 1.00,
+                    };
+                    break;
+                case SynthStylePreset.AMBIENT:
+                    p = {
+                        attackSec: 0.010,
+                        fastDecaySec: 0.95,
+                        slowDecaySec: 5.20,
+                        basePeakGain: 0.76,
+                        fastDecayLevel: 0.24,
+                        overtoneRatio: 2.98,
+                        overtonePeakGain: 0.14,
+                        overtoneDecaySec: 1.20,
+                        transientFreqMul: 7.1,
+                        transientPeakGain: 0.022,
+                        transientDecaySec: 0.075,
+                        hpHz: 120,
+                        lpHz: 7600,
+                        presetGain: 1.20,
                     };
                     break;
             }
@@ -445,6 +470,7 @@ export class AudioManager extends Component {
             transientDecaySec: p.transientDecaySec,
             hpHz: p.hpHz,
             lpHz: p.lpHz,
+            presetGain: p.presetGain,
         });
     }
     

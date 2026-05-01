@@ -28,6 +28,7 @@ const DISPLAY_NODE = 'SheetImage';
 const MASK_ROOT = 'MaskRoot';
 const DOT_ROW = 'DotRow';
 const SLIDES_ROOT = 'SlidesRoot';
+const SELECTED_IMAGES_KEY = 'kalinba_selected_images_v1';
 
 /** 指示器：当前页蓝色、其它浅灰（参考常见轮播点样式） */
 const DOT_ACTIVE = new Color(59, 130, 221, 255);
@@ -37,6 +38,10 @@ enum PageTurnMode {
     HORIZONTAL = 0,
     VERTICAL = 1,
 }
+
+const AUTO_SCROLL_SPEED_MIN = 0;
+const AUTO_SCROLL_SPEED_MAX = 100;
+const AUTO_SCROLL_SPEED_DEFAULT = 50;
 
 /**
  * 顶部琴谱区域：轮播图；固定尺寸拉伸；仅左下/右下圆角。
@@ -48,6 +53,10 @@ export class SheetMusicBackground extends Component {
     /** 默认轮播图（不选图时使用，支持配置 1~N 张） */
     @property([SpriteFrame])
     defaultSpriteFrames: SpriteFrame[] = [];
+
+    /** 回放分享演奏时替换的背景图（在编辑器里绑定） */
+    @property(SpriteFrame)
+    sharePlaybackFrame: SpriteFrame = null;
 
     @property(Button)
     selectImageButton: Button = null;
@@ -80,8 +89,14 @@ export class SheetMusicBackground extends Component {
     @property({ tooltip: '单张长图自动纵向滚动（按宽度适配，不切图）' })
     enableTallImageAutoPaging: boolean = true;
 
-    @property({ tooltip: '单图滚动触发倍数：宽度适配后高度 > 容器高度 * 该值 才启用滚动' })
-    singleImageScrollThreshold: number = 1.25;
+    @property({ tooltip: '单图滚动触发倍数：宽度适配后高度 > 容器高度 * 该值 才启用滚动（建议接近 1）' })
+    singleImageScrollThreshold: number = 1.01;
+
+    @property({ tooltip: '启用自动滚动/自动翻页（拖动时暂停，松手后继续）' })
+    enableAutoScroll: boolean = true;
+
+    @property({ tooltip: '自动滚动速度 1~100（默认 50）' })
+    autoScrollSpeed: number = AUTO_SCROLL_SPEED_DEFAULT;
 
     @property
     displayWidth: number = 1120;
@@ -118,6 +133,11 @@ export class SheetMusicBackground extends Component {
     private _touchDragging = false;
     private _dragDx = 0;
     private _dragDy = 0;
+    private _autoPageElapsedSec = 0;
+    private _autoScrollRunning = false;
+    private _autoScrollOffset = 0;
+    private _autoScrollMaxOffset = 0;
+    private _debugFrameCount = 0;
 
     onLoad() {
         this.setupSizeMaskAndSpriteHost();
@@ -127,6 +147,7 @@ export class SheetMusicBackground extends Component {
         const sheet = SheetSettingsStore.load();
         this.pageTurnMode =
             sheet.pageTurnMode === 1 ? PageTurnMode.VERTICAL : PageTurnMode.HORIZONTAL;
+        this.autoScrollSpeed = Math.max(AUTO_SCROLL_SPEED_MIN, Math.min(AUTO_SCROLL_SPEED_MAX, sheet.autoScrollSpeed));
 
         this.sprite = this.findDisplaySprite();
         if (!this.sprite) {
@@ -168,6 +189,162 @@ export class SheetMusicBackground extends Component {
         this.updateNavAndPageLabel();
         this.syncSheetRuntimeToStore();
         this.scheduleOnce(() => this.refreshDotRowLayout(), 0);
+        this.alignSingleTallImageToTop();
+        this.restoreSelectedImages();
+    }
+
+    private saveSelectedImageUrls(urls: string[]) {
+        try {
+            if (urls.length === 0) {
+                sys.localStorage.removeItem(SELECTED_IMAGES_KEY);
+            } else {
+                sys.localStorage.setItem(SELECTED_IMAGES_KEY, JSON.stringify(urls));
+            }
+        } catch { /* ignore */ }
+    }
+
+    private restoreSelectedImages() {
+        try {
+            const raw = sys.localStorage.getItem(SELECTED_IMAGES_KEY);
+            if (!raw) return;
+            const urls = JSON.parse(raw) as string[];
+            if (!Array.isArray(urls) || urls.length === 0) return;
+            void this.loadCarouselFromUrls(urls);
+        } catch { /* ignore */ }
+    }
+
+    private hasSavedSelectedImages(): boolean {
+        try {
+            const raw = sys.localStorage.getItem(SELECTED_IMAGES_KEY);
+            if (!raw) return false;
+            const urls = JSON.parse(raw) as string[];
+            return Array.isArray(urls) && urls.length > 0;
+        } catch {
+            return false;
+        }
+    }
+
+    /** 初始展示时：如果是单张长图，移动 _slidesRoot 使图片顶部对齐容器顶部 */
+    private alignSingleTallImageToTop() {
+        if (!this._slidesRoot) return;
+        const srcSize = this.getPrimarySlideSourceSize();
+        if (!srcSize || srcSize.w <= 0 || srcSize.h <= 0) return;
+        if (this.getActiveFrames().length !== 1) return;
+
+        const contentH = this.displayWidth * srcSize.h / srcSize.w;
+        if (contentH <= this.displayHeight + 1) return;
+
+        const firstSlide = this._slidesRoot.children[0];
+        if (!firstSlide) return;
+        const ui = firstSlide.getComponent(UITransform);
+        if (ui) {
+            ui.setContentSize(this.displayWidth, contentH);
+        }
+        firstSlide.setPosition(0, 0, 0);
+        const topY = (this.displayHeight - contentH) * 0.5;
+        this._slidesRoot.setPosition(0, topY, 0);
+    }
+
+    update(dt: number) {
+        if (this._autoScrollRunning) {
+            this._debugFrameCount++;
+            if (this._debugFrameCount <= 3 || this._debugFrameCount % 120 === 0) {
+                console.log(`[AutoScroll] update frame=${this._debugFrameCount}: running=${this._autoScrollRunning}, picking=${this._isPickingImages}, dragging=${this._touchDragging}, slidesRoot=${!!this._slidesRoot}, maxOffset=${this._autoScrollMaxOffset}, offset=${this._autoScrollOffset.toFixed(1)}, singleTall=${this._singleTallScrollActive}`);
+            }
+        }
+
+        if (!this._autoScrollRunning || this._isPickingImages || this._touchDragging) return;
+        if (!this._slidesRoot || !this._slidesRoot.isValid) return;
+
+        if (this._autoScrollMaxOffset > 0) {
+            this.stepSimpleAutoScroll(dt);
+            return;
+        }
+
+        const n = this.getSlideCountForUI();
+        if (n <= 1 && !this._singleTallScrollActive) return;
+        if (this._singleTallScrollActive) {
+            this.stepTallImageAutoScroll(dt);
+            return;
+        }
+        this.stepMultiPageAutoTurn(dt);
+    }
+
+    /** 由外部（如录制按钮）控制自动滚动启停 */
+    setAutoScrollRunning(active: boolean) {
+        this._autoScrollRunning = !!active;
+        console.log(`[AutoScroll] setAutoScrollRunning(${active}): maxOffset=${this._autoScrollMaxOffset}, _singleTallScrollActive=${this._singleTallScrollActive}`);
+        if (!this._autoScrollRunning) {
+            this._autoPageElapsedSec = 0;
+            this._autoScrollOffset = 0;
+            this._autoScrollMaxOffset = 0;
+            this._debugFrameCount = 0;
+            return;
+        }
+        const n = this.getSlideCountForUI();
+        if (!this._singleTallScrollActive && n > 1) {
+            const interval = this.getMultiPageAutoTurnIntervalSec();
+            this._autoPageElapsedSec = Math.max(0, interval - 1.0);
+        } else {
+            this._autoPageElapsedSec = 0;
+        }
+    }
+
+    /** 录制前对齐：单图从顶部起步准备滚动，多图对齐当前页 */
+    alignForRecordingStart() {
+        if (!this._slidesRoot || !this._slidesRoot.isValid) {
+            console.log('[AutoScroll] alignForRecordingStart: _slidesRoot 无效，跳过');
+            return;
+        }
+
+        const frameCount = this.getActiveFrames().length;
+        const srcSize = this.getPrimarySlideSourceSize();
+        const contentH = (srcSize && srcSize.w > 0 && srcSize.h > 0)
+            ? (this.displayWidth * srcSize.h / srcSize.w)
+            : 0;
+        const overflow = contentH - this.displayHeight;
+
+        console.log(`[AutoScroll] alignForRecordingStart: frameCount=${frameCount}, srcSize=${JSON.stringify(srcSize)}, displayW=${this.displayWidth}, displayH=${this.displayHeight}, contentH=${contentH.toFixed(1)}, overflow=${overflow.toFixed(1)}`);
+
+        if (frameCount === 1 && overflow > 1) {
+            this._autoScrollOffset = 0;
+            this._autoScrollMaxOffset = overflow;
+
+            const firstSlide = this._slidesRoot.children[0];
+            if (firstSlide) {
+                const ui = firstSlide.getComponent(UITransform);
+                if (ui) {
+                    ui.setContentSize(this.displayWidth, contentH);
+                }
+                firstSlide.setPosition(0, 0, 0);
+            }
+            const topY = (this.displayHeight - contentH) * 0.5;
+            this._slidesRoot.setPosition(0, topY, 0);
+            console.log(`[AutoScroll] 长图滚动已就绪: maxOffset=${this._autoScrollMaxOffset.toFixed(1)}, slidesRoot.y=${topY.toFixed(1)}`);
+            return;
+        }
+
+        this._autoScrollMaxOffset = 0;
+        const n = this.getSlideCountForUI();
+        if (n <= 1) {
+            console.log('[AutoScroll] 仅1页且不可滚动，跳过');
+            return;
+        }
+        this.carouselIndex = 0;
+        const base = this.getRootBasePos(0);
+        this._slidesRoot.setPosition(base);
+        console.log(`[AutoScroll] 多页模式，重置到第0页`);
+    }
+
+    private stepSimpleAutoScroll(dt: number) {
+        if (!this._slidesRoot || this._autoScrollMaxOffset <= 0) return;
+        const speed = this.getTallAutoScrollSpeedPxPerSec();
+        this._autoScrollOffset += speed * Math.max(0, dt);
+        if (this._autoScrollOffset > this._autoScrollMaxOffset) {
+            this._autoScrollOffset = this._autoScrollMaxOffset;
+        }
+        const topY = (this.displayHeight - (this.displayHeight + this._autoScrollMaxOffset)) * 0.5;
+        this._slidesRoot.setPosition(0, topY + this._autoScrollOffset, 0);
     }
 
     /** 根节点增高后，刷新指示条位置 */
@@ -185,9 +362,7 @@ export class SheetMusicBackground extends Component {
      * UI 用「页数」：无用户选图时若仍有默认图/当前 Sprite 有帧，计为 1 页，便于显示圆点与 1/1。
      */
     private getSlideCountForUI(): number {
-        if (this._singleTallScrollActive) {
-            return this.getTallVirtualPageCount();
-        }
+        if (this._singleTallScrollActive) return this.getTallVirtualPageCount();
         const n = this.getActiveFrames().length;
         if (n > 0) return n;
         if (this.sprite?.spriteFrame) return 1;
@@ -215,6 +390,29 @@ export class SheetMusicBackground extends Component {
         return null;
     }
 
+    /** 单图源尺寸：优先使用 SpriteFrame 的 rect/originalSize，兜底 texture 尺寸 */
+    private getPrimarySlideSourceSize(): { w: number; h: number } | null {
+        if (this.carouselTextures.length === 1) {
+            const s = this.getTextureSize(this.carouselTextures[0]);
+            return s.w > 0 && s.h > 0 ? s : null;
+        }
+        const frames = this.getActiveFrames();
+        if (frames.length !== 1 || !frames[0]) return null;
+        const f = frames[0] as unknown as {
+            rect?: { width?: number; height?: number };
+            originalSize?: { width?: number; height?: number };
+            texture?: Texture2D;
+        };
+        const fw = Math.floor(f.rect?.width ?? f.originalSize?.width ?? 0);
+        const fh = Math.floor(f.rect?.height ?? f.originalSize?.height ?? 0);
+        if (fw > 0 && fh > 0) return { w: fw, h: fh };
+        if (f.texture) {
+            const s = this.getTextureSize(f.texture);
+            return s.w > 0 && s.h > 0 ? s : null;
+        }
+        return null;
+    }
+
     /**
      * 内置 defaultSpriteFrames 仅一张且为长图时：与 URL 选单张长图一致，启用纵向滚动（不写入 carouselTextures）
      */
@@ -228,14 +426,14 @@ export class SheetMusicBackground extends Component {
             this.updateSingleTallScrollBounds();
             return;
         }
-        const tex = this.getPrimarySlideTexture();
-        if (!tex) {
+        const size = this.getPrimarySlideSourceSize();
+        if (!size) {
             this.updateSingleTallScrollBounds();
             return;
         }
-        const { w, h } = this.getTextureSize(tex);
+        const { w, h } = size;
         const contentH = (w > 0 && h > 0) ? (this.displayWidth * h / w) : 0;
-        const threshold = Math.max(1.01, this.singleImageScrollThreshold);
+        const threshold = Math.max(1.001, this.singleImageScrollThreshold);
         if (contentH > this.displayHeight * threshold) {
             this._singleTallScrollActive = true;
             this._forceVerticalPaging = true;
@@ -248,6 +446,73 @@ export class SheetMusicBackground extends Component {
 
     private getCurrentPageTurnMode(): PageTurnMode {
         return this._forceVerticalPaging ? PageTurnMode.VERTICAL : this.pageTurnMode;
+    }
+
+    /** 长图滚动速度 px/s：speed=0 → 0(不滚), speed=1 → 8px/s, speed=100 → 80px/s */
+    private getTallAutoScrollSpeedPxPerSec(): number {
+        if (this.autoScrollSpeed <= 0) return 0;
+        const t = (this.autoScrollSpeed - 1) / 99;
+        return 8 + t * 72;
+    }
+
+    /** 多图翻页间隔秒：speed=0 → 不翻, speed=1 → 12s, speed=100 → 2s */
+    private getMultiPageAutoTurnIntervalSec(): number {
+        if (this.autoScrollSpeed <= 0) return Infinity;
+        const t = (this.autoScrollSpeed - 1) / 99;
+        return 12 - t * 10;
+    }
+
+    private stepTallImageAutoScroll(dt: number) {
+        this.refreshSingleTallStateFromRenderedSlide();
+        if (!this._singleTallScrollActive || !this._slidesRoot) return;
+        const speed = this.getTallAutoScrollSpeedPxPerSec();
+        if (speed <= 0) return;
+        const prevY = this._slidesRoot.position.y;
+        let y = prevY + speed * Math.max(0, dt);
+        y = Math.max(this._singleTallMinY, Math.min(this._singleTallMaxY, y));
+        if (Math.abs(y - prevY) <= 1e-3) return;
+        this._slidesRoot.setPosition(0, y, 0);
+    }
+
+    /** 以当前已渲染的首图高度为准，重算“是否长图可滚动”及上下边界（比资源元数据更稳） */
+    private refreshSingleTallStateFromRenderedSlide() {
+        if (!this._slidesRoot || !this._slidesRoot.isValid) return;
+        const n = this.getActiveFrames().length;
+        if (n !== 1) {
+            this._singleTallScrollActive = false;
+            this._forceVerticalPaging = false;
+            this._singleTallMinY = 0;
+            this._singleTallMaxY = 0;
+            this.syncSheetRuntimeToStore();
+            return;
+        }
+        const first = this._slidesRoot.children[0];
+        const ui = first?.getComponent(UITransform);
+        const contentH = ui?.height ?? this.displayHeight;
+        const threshold = Math.max(1.001, this.singleImageScrollThreshold);
+        if (this.enableTallImageAutoPaging && contentH > this.displayHeight * threshold) {
+            this._singleTallScrollActive = true;
+            this._forceVerticalPaging = true;
+            this._singleTallMinY = (this.displayHeight - contentH) * 0.5;
+            this._singleTallMaxY = (contentH - this.displayHeight) * 0.5;
+        } else {
+            this._singleTallScrollActive = false;
+            this._forceVerticalPaging = false;
+            this._singleTallMinY = 0;
+            this._singleTallMaxY = 0;
+        }
+        this.syncSheetRuntimeToStore();
+    }
+
+    private stepMultiPageAutoTurn(dt: number) {
+        const n = this.getSlideCountForUI();
+        if (n <= 1) return;
+        this._autoPageElapsedSec += Math.max(0, dt);
+        const interval = this.getMultiPageAutoTurnIntervalSec();
+        if (this._autoPageElapsedSec < interval) return;
+        this._autoPageElapsedSec = 0;
+        const next = this.carouselIndex >= n - 1 ? 0 : this.carouselIndex + 1;
+        this.changeToIndex(next, true);
     }
 
     private syncSheetRuntimeToStore() {
@@ -297,14 +562,14 @@ export class SheetMusicBackground extends Component {
     }
 
     private updateSingleTallScrollBounds() {
-        const primary = this.getPrimarySlideTexture();
-        if (!this._singleTallScrollActive || !primary) {
+        const size = this.getPrimarySlideSourceSize();
+        if (!this._singleTallScrollActive || !size) {
             this._singleTallMinY = 0;
             this._singleTallMaxY = 0;
             this.syncSheetRuntimeToStore();
             return;
         }
-        const { w, h } = this.getTextureSize(primary);
+        const { w, h } = size;
         if (w <= 0 || h <= 0) {
             this._singleTallScrollActive = false;
             this._forceVerticalPaging = false;
@@ -314,7 +579,7 @@ export class SheetMusicBackground extends Component {
             return;
         }
         const contentH = this.displayWidth * h / w;
-        const threshold = Math.max(1.01, this.singleImageScrollThreshold);
+        const threshold = Math.max(1.001, this.singleImageScrollThreshold);
         if (contentH <= this.displayHeight * threshold) {
             this._singleTallScrollActive = false;
             this._forceVerticalPaging = false;
@@ -721,7 +986,9 @@ export class SheetMusicBackground extends Component {
                 const primaryTex = i === 0 ? this.getPrimarySlideTexture() : null;
                 if (primaryTex) {
                     // 单图始终按原图宽高比显示（宽度贴合容器），避免被容器比例强拉伸
-                    const { w, h } = this.getTextureSize(primaryTex);
+                    const size = i === 0 ? this.getPrimarySlideSourceSize() : null;
+                    const w = size?.w ?? 0;
+                    const h = size?.h ?? 0;
                     const contentH = (w > 0 && h > 0) ? (this.displayWidth * h / w) : this.displayHeight;
                     if (this._singleTallScrollActive) {
                         ui.setContentSize(this.displayWidth, Math.max(this.displayHeight, contentH));
@@ -750,6 +1017,7 @@ export class SheetMusicBackground extends Component {
     private changeToIndex(targetIndex: number, animated: boolean) {
         const n = this.getSlideCountForUI();
         if (n <= 0) return;
+        this._autoPageElapsedSec = 0;
         this.carouselIndex = Math.max(0, Math.min(targetIndex, n - 1));
         this.applyCurrentSlideInternal(animated);
         this.updateNavAndPageLabel();
@@ -757,6 +1025,7 @@ export class SheetMusicBackground extends Component {
 
     private onTouchStart(e: EventTouch) {
         if (this._isPickingImages) return;
+        this._autoPageElapsedSec = 0;
         const p = e.getUILocation();
         this._touchStartX = p.x;
         this._touchStartY = p.y;
@@ -818,6 +1087,7 @@ export class SheetMusicBackground extends Component {
                 this.carouselIndex = idx;
             }
             this.updateNavAndPageLabel();
+            this._autoPageElapsedSec = 0;
             return;
         }
         const p = e.getUILocation();
@@ -884,6 +1154,7 @@ export class SheetMusicBackground extends Component {
 
     async openImagePicker() {
         if (this._isPickingImages) {
+            console.log('[SheetMusic] openImagePicker 被跳过: _isPickingImages=true');
             return;
         }
         // 微信真机：wx 可能在 GameGlobal；须同时认 WECHAT_GAME
@@ -911,10 +1182,14 @@ export class SheetMusicBackground extends Component {
             const oldRevoke = this.blobRevoke;
             this.blobRevoke = res.revokeAll ?? null;
             await this.loadCarouselFromUrls(res.urls);
+            this.saveSelectedImageUrls(res.urls);
             if (oldRevoke) {
                 oldRevoke();
             }
+        } catch (e) {
+            console.error('[SheetMusic] openImagePicker 异常:', e);
         } finally {
+            console.log('[SheetMusic] openImagePicker finally: 重置 _isPickingImages=false');
             this._isPickingImages = false;
             this.updateNavAndPageLabel();
         }
@@ -1062,7 +1337,7 @@ export class SheetMusicBackground extends Component {
             const { w, h } = this.getTextureSize(loaded[0]);
             const contentH = (w > 0 && h > 0) ? (this.displayWidth * h / w) : 0;
             // 以“宽度适配后是否超过可视高度”为准，避免仅用 h/w 阈值误判导致单图不能滚动
-            const threshold = Math.max(1.01, this.singleImageScrollThreshold);
+            const threshold = Math.max(1.001, this.singleImageScrollThreshold);
             if (this.enableTallImageAutoPaging && contentH > this.displayHeight * threshold) {
                 this._singleTallScrollActive = true;
                 this._forceVerticalPaging = true;
@@ -1078,6 +1353,7 @@ export class SheetMusicBackground extends Component {
         this.carouselIndex = 0;
         this.rebuildSlides(true);
         this.applyCurrentSlideInternal(false);
+        this.alignSingleTallImageToTop();
         this.updateNavAndPageLabel();
         this.scheduleOnce(() => {
             const using = new Set(this.carouselTextures);
@@ -1097,9 +1373,9 @@ export class SheetMusicBackground extends Component {
         const n = this.getSlideCountForUI();
         if (n <= 0) return;
         if (this._singleTallScrollActive) {
-            this.carouselIndex = Math.max(0, Math.min(this.carouselIndex, this.getTallVirtualPageCount() - 1));
             this.rebuildSlides(false);
-            const to = new Vec3(0, this.getTallYByPageIndex(this.carouselIndex), 0);
+            const currentY = this._slidesRoot.position.y;
+            const to = new Vec3(0, Math.max(this._singleTallMinY, Math.min(this._singleTallMaxY, currentY)), 0);
             if (animated) {
                 tween(this._slidesRoot).to(0.16, { position: to }).start();
             } else {
@@ -1141,16 +1417,56 @@ export class SheetMusicBackground extends Component {
     }
 
     resetToDefault() {
+        const shouldRestoreSelected = this.hasSavedSelectedImages();
         if (this.blobRevoke) {
             this.blobRevoke();
             this.blobRevoke = null;
         }
         this.clearCarouselTexturesOnly();
+        if (shouldRestoreSelected) {
+            // 回放结束后优先恢复用户之前选择的图片，而不是强制回默认图。
+            this.restoreSelectedImages();
+            return;
+        }
         this.carouselIndex = 0;
+        this._autoPageElapsedSec = 0;
         this.rebuildSlides(true);
         this.applyTallScrollForSingleBuiltInImageIfNeeded();
         this.updateNavAndPageLabel();
         this.syncSheetRuntimeToStore();
+        this.alignSingleTallImageToTop();
+    }
+
+    /** 切换到分享回放专用背景图 */
+    switchToSharePlaybackBg() {
+        if (!this.sharePlaybackFrame) return;
+        this._singleTallScrollActive = false;
+        this._forceVerticalPaging = false;
+        this._carouselFrames = [];
+        this.carouselTextures = [];
+        this.carouselIndex = 0;
+
+        if (this.sprite) {
+            this.sprite.spriteFrame = this.sharePlaybackFrame;
+        }
+        this.ensureSlidesRoot();
+        if (this._slidesRoot) {
+            for (const c of [...this._slidesRoot.children]) {
+                c.removeFromParent();
+                c.destroy();
+            }
+            const n = new Node('Slide_0');
+            const ui = n.addComponent(UITransform);
+            ui.setContentSize(this.displayWidth, this.displayHeight);
+            ui.setAnchorPoint(0.5, 0.5);
+            const s = n.addComponent(Sprite);
+            s.sizeMode = Sprite.SizeMode.CUSTOM;
+            s.spriteFrame = this.sharePlaybackFrame;
+            n.setParent(this._slidesRoot);
+            n.setPosition(0, 0, 0);
+            this._slidesRoot.setPosition(0, 0, 0);
+        }
+        this.updateNavAndPageLabel();
     }
 
     onDestroy() {
