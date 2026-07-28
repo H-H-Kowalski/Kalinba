@@ -323,6 +323,21 @@ export class AudioManager extends Component {
         return this.useManualSynthTuning;
     }
 
+    /** 节拍器/闯关判定共用的音频时钟。 */
+    getAudioCurrentTime(): number | null {
+        return this.synthEngine?.getCurrentTime() ?? null;
+    }
+
+    async resumeWebAudio(): Promise<boolean> {
+        if (!this.synthEngine || !this.synthEngine.isSupported()) return false;
+        await this.synthEngine.resume();
+        return this.synthEngine.getCurrentTime() !== null;
+    }
+
+    scheduleMetronomeTick(at: number, accented: boolean): boolean {
+        return this.synthEngine?.scheduleMetronomeTick(at, accented) ?? false;
+    }
+
     getSynthStyleName(): string {
         switch (this.synthStylePreset) {
             case SynthStylePreset.BRIGHT:
@@ -483,4 +498,4 @@ export class AudioManager extends Component {
         }
         return 0;
     }
-} 
+}

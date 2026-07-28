@@ -26,6 +26,7 @@ type VoiceHandle = {
     transientGain: GainNode;
     hp: BiquadFilterNode;
     lp: BiquadFilterNode;
+    body: BiquadFilterNode;
 };
 
 export interface KalimbaSynthParams {
@@ -67,6 +68,8 @@ type WebAudioCtx = AudioContext;
 
 export class SynthKalimbaEngine {
     private static readonly MAX_OUTPUT_GAIN = 3.75;
+    /** 手机上的多点连弹以清晰起音优先，超过上限时淘汰最早尾音。 */
+    private static readonly MAX_ACTIVE_VOICES = 10;
     private static loggedIsSupportedOnce = false;
     private audioContext: WebAudioCtx | null = null;
     private masterGain: GainNode | null = null;
@@ -259,6 +262,49 @@ export class SynthKalimbaEngine {
         }
     }
 
+    getCurrentTime(): number | null {
+        if (!this.ensureContext() || !this.audioContext || this.audioContext.state === 'closed') return null;
+        return this.audioContext.currentTime;
+    }
+
+    /**
+     * 节拍器的点击音：同样经 master/limiter 输出，但不占用琴键发声数。
+     * at 为 AudioContext 时间，调用方应使用 look-ahead 调度。
+     */
+    scheduleMetronomeTick(at: number, accented: boolean): boolean {
+        if (!this.ensureContext() || !this.audioContext || !this.masterGain) return false;
+        const ctx = this.audioContext;
+        if (ctx.state === 'closed') return false;
+        const now = ctx.currentTime;
+        const when = Math.max(now + 0.003, at);
+        try {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            const filter = ctx.createBiquadFilter();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(accented ? 1760 : 1240, when);
+            filter.type = 'highpass';
+            filter.frequency.setValueAtTime(650, when);
+            gain.gain.setValueAtTime(0.0001, when);
+            gain.gain.exponentialRampToValueAtTime(accented ? 0.22 : 0.13, when + 0.0015);
+            gain.gain.exponentialRampToValueAtTime(0.0001, when + (accented ? 0.042 : 0.030));
+            osc.connect(gain);
+            gain.connect(filter);
+            filter.connect(this.masterGain);
+            osc.start(when);
+            osc.stop(when + 0.055);
+            osc.onended = () => {
+                try { osc.disconnect(); } catch {}
+                try { gain.disconnect(); } catch {}
+                try { filter.disconnect(); } catch {}
+            };
+            return true;
+        } catch (e) {
+            kalimbaAudioWarn('Metronome', 'schedule tick failed', e);
+            return false;
+        }
+    }
+
     setVolume(volume: number) {
         if (!this.ensureContext() || !this.masterGain) return;
         /** 微信小游戏 WebAudio 在真机外放上往往偏轻，主增益放宽到 250%（按需求：较原始 100% 增加 150%） */
@@ -324,7 +370,15 @@ export class SynthKalimbaEngine {
         lp.type = 'lowpass';
         lp.frequency.setValueAtTime(Math.max(500, this.params.lpHz), now);
 
-        hp.connect(lp);
+        const body = ctx.createBiquadFilter();
+        body.type = 'peaking';
+        // 温和补偿琴箱的中低频共鸣；避免加重低音浑浊。
+        body.frequency.setValueAtTime(720, now);
+        body.Q.setValueAtTime(0.72, now);
+        body.gain.setValueAtTime(3.2, now);
+
+        hp.connect(body);
+        body.connect(lp);
         lp.connect(this.masterGain);
 
         // -----------------------------
@@ -375,7 +429,13 @@ export class SynthKalimbaEngine {
             transientGain,
             hp,
             lp,
+            body,
         };
+        while (this.activeVoices.size >= SynthKalimbaEngine.MAX_ACTIVE_VOICES) {
+            const oldest = this.activeVoices.values().next().value as VoiceHandle | undefined;
+            if (!oldest) break;
+            this.stopVoice(oldest);
+        }
         this.activeVoices.add(voice);
 
         // 启停时间：主体尾音长，泛音/瞬态更短
@@ -394,6 +454,7 @@ export class SynthKalimbaEngine {
             try { transientGain.disconnect(); } catch {}
             try { hp.disconnect(); } catch {}
             try { lp.disconnect(); } catch {}
+            try { body.disconnect(); } catch {}
         };
         fundamentalOsc.onended = cleanup;
         return true;
@@ -401,16 +462,21 @@ export class SynthKalimbaEngine {
 
     stopAll() {
         for (const v of [...this.activeVoices]) {
-            try { v.fundamentalOsc.stop(); } catch {}
-            try { v.overtoneOsc.stop(); } catch {}
-            try { v.transientOsc.stop(); } catch {}
-            try { v.fundamentalGain.disconnect(); } catch {}
-            try { v.overtoneGain.disconnect(); } catch {}
-            try { v.transientGain.disconnect(); } catch {}
-            try { v.hp.disconnect(); } catch {}
-            try { v.lp.disconnect(); } catch {}
-            this.activeVoices.delete(v);
+            this.stopVoice(v);
         }
+    }
+
+    private stopVoice(v: VoiceHandle): void {
+        try { v.fundamentalOsc.stop(); } catch {}
+        try { v.overtoneOsc.stop(); } catch {}
+        try { v.transientOsc.stop(); } catch {}
+        try { v.fundamentalGain.disconnect(); } catch {}
+        try { v.overtoneGain.disconnect(); } catch {}
+        try { v.transientGain.disconnect(); } catch {}
+        try { v.hp.disconnect(); } catch {}
+        try { v.body.disconnect(); } catch {}
+        try { v.lp.disconnect(); } catch {}
+        this.activeVoices.delete(v);
     }
 
     getActiveVoiceCount(): number {
@@ -465,4 +531,3 @@ export class SynthKalimbaEngine {
         param.exponentialRampToValueAtTime(0.0001, now + Math.max(0.01, this.params.transientDecaySec));
     }
 }
-

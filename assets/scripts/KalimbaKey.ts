@@ -7,6 +7,7 @@ const { ccclass, property } = _decorator;
 @ccclass('KalimbaKey')
 export class KalimbaKey extends Component {
     private static keyRegistry: Map<number, KalimbaKey> = new Map();
+    private static readonly playListeners = new Set<(keyIndex: number) => void>();
 
     @property
     keyIndex: number = 0;  // 琴键编号（0-16）
@@ -38,15 +39,53 @@ export class KalimbaKey extends Component {
     private isPressed: boolean = false;
     private replayVisualToken = 0;
     private defaultScale: Vec3 = new Vec3(1, 1, 1);
+    private normalSpriteColor: Color = new Color(255, 255, 255, 255);
+    private guidanceActive = false;
 
     static getByIndex(index: number): KalimbaKey | null {
         return KalimbaKey.keyRegistry.get(index) ?? null;
+    }
+
+    static setGuidanceKey(keyIndex: number | null): void {
+        for (const [index, key] of KalimbaKey.keyRegistry) {
+            key.setGuidanceActive(keyIndex !== null && index === keyIndex);
+        }
+    }
+
+    static getDisplayNote(index: number): string {
+        return this.noteMap[index]?.num ?? '?';
+    }
+
+    /** 挑战谱面使用：保留高低音点，避免左右两侧同数字琴键产生歧义。 */
+    static getChallengeDisplayNote(index: number): string {
+        const note = this.noteMap[index];
+        return note ? `${note.dot}${note.num}` : '?';
+    }
+
+    /** 关卡判定等玩法订阅真实用户按键；回放不会经过此入口。 */
+    static addPlayListener(listener: (keyIndex: number) => void): void {
+        this.playListeners.add(listener);
+    }
+
+    static removePlayListener(listener: (keyIndex: number) => void): void {
+        this.playListeners.delete(listener);
+    }
+
+    private static emitUserPlay(keyIndex: number): void {
+        for (const listener of this.playListeners) {
+            try {
+                listener(keyIndex);
+            } catch (e) {
+                console.warn('[KalimbaKey] play listener failed', e);
+            }
+        }
     }
 
     start() {
         this.audioSource = this.getComponent(AudioSource) || this.addComponent(AudioSource);
         this.sprite = this.getComponent(Sprite) || this.addComponent(Sprite);
         this.defaultScale = this.node.getScale().clone();
+        this.normalSpriteColor = this.sprite.color.clone();
         
         // 尝试自动获取 Label
         if (!this.noteLabel) {
@@ -84,9 +123,7 @@ export class KalimbaKey extends Component {
         this.node.on(Node.EventType.TOUCH_CANCEL, this.onTouchEnd, this);
     }
 
-    /**
-     * 按下：变透明(50%)、播放
-     */
+    /** 按下即给出金属弹片的暖高光与短促下压。 */
     onTouchStart(event: any) {
         this.isPressed = true;
         
@@ -176,15 +213,45 @@ export class KalimbaKey extends Component {
 
     private applyPressedVisual(pressed: boolean) {
         if (!this.sprite) return;
-        const color = this.sprite.color.clone();
-        color.a = pressed ? 128 : 255;
-        this.sprite.color = color;
+        const c = this.normalSpriteColor.clone();
+        if (this.guidanceActive) {
+            c.r = 255;
+            c.g = Math.min(255, c.g + 5);
+            c.b = Math.max(0, c.b - 45);
+        }
+        if (pressed) {
+            // 保留贴图明暗细节，只用轻微暖色调模拟弹片受光，不做半透明以免显得廉价。
+            c.r = Math.min(255, c.r + 8);
+            c.g = Math.min(255, c.g + 1);
+            c.b = Math.max(0, c.b - 24);
+        }
+        this.sprite.color = c;
+        Tween.stopAllByTarget(this.node);
+        const sx = this.defaultScale.x;
+        const sy = this.defaultScale.y;
+        const sz = this.defaultScale.z;
+        if (pressed) {
+            tween(this.node)
+                .to(0.035, { scale: new Vec3(sx * 0.985, sy * 0.955, sz) })
+                .start();
+        } else {
+            tween(this.node)
+                .to(0.075, { scale: new Vec3(sx, sy, sz) })
+                .start();
+        }
+    }
+
+    private setGuidanceActive(active: boolean) {
+        if (this.guidanceActive === active) return;
+        this.guidanceActive = active;
+        if (!this.isPressed) this.applyPressedVisual(false);
     }
 
     private playKeySound(worldPos?: Vec3) {
         try {
             const audioManager = AudioManager.getInstance();
             if (audioManager) {
+                KalimbaKey.emitUserPlay(this.keyIndex);
                 PerformanceRecorder.recordKey(this.keyIndex);
                 audioManager.playKeySound(this.keyIndex, worldPos, this.keySound);
                 return;

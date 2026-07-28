@@ -3,6 +3,11 @@ import { SceneManager } from '../manager/SceneManager';
 import { applySavedFontToSubtree } from '../manager/GlobalFontApplier';
 import { showAboutContactPanel } from './AboutContactPanel';
 import { installShareLaunchCapture } from '../manager/PerformanceShareLaunch';
+import { ChallengeLaunchStore } from '../manager/ChallengeLaunchStore';
+import { AchievementCloudService } from '../manager/AchievementCloudService';
+import { LevelProgressStore } from '../manager/LevelProgressStore';
+import { LevelSelectOverlay } from './LevelSelectOverlay';
+import { showAchievementOverlay } from './AchievementOverlay';
 const { ccclass, property } = _decorator;
 
 /** 挂在 mainscene 的 Canvas 上；开始按钮可拖入 startBtn，或留空由节点名 start_button 自动绑定 */
@@ -17,6 +22,14 @@ export class HomeScene extends Component {
     @property(Button)
     aboutButton: Button = null;  // 关于按钮
 
+    /** 可选：若场景未配置，将自动生成“挑战练习”入口。 */
+    @property(Button)
+    challengeButton: Button = null;
+
+    /** 可选：若场景未配置，将自动生成“成就”入口。 */
+    @property(Button)
+    achievementButton: Button = null;
+
     @property(Label)
     titleLabel: Label = null;  // 标题文字
 
@@ -26,9 +39,13 @@ export class HomeScene extends Component {
     @property(Node)
     logoNode: Node = null;  // Logo节点
 
+    private levelSelectOverlay: LevelSelectOverlay | null = null;
+
     onLoad() {
         installShareLaunchCapture();
         this.bindStartButtonIfNeeded();
+        this.bindChallengeButtonIfNeeded();
+        this.bindAchievementButtonIfNeeded();
     }
 
     /** 未在编辑器绑定 startBtn 时，自动使用子节点 start_button */
@@ -43,8 +60,22 @@ export class HomeScene extends Component {
         }
     }
 
+    private bindChallengeButtonIfNeeded() {
+        if (this.challengeButton) return;
+        const n = this.node.getChildByName('challengeButton') ?? this.node.getChildByName('challenge_button');
+        this.challengeButton = n?.getComponent(Button) ?? null;
+    }
+
+    private bindAchievementButtonIfNeeded() {
+        if (this.achievementButton) return;
+        const n = this.node.getChildByName('achievementButton') ?? this.node.getChildByName('achievement_button');
+        this.achievementButton = n?.getComponent(Button) ?? null;
+    }
+
     start() {
         this.setupButtons();
+        this.levelSelectOverlay = this.getComponent(LevelSelectOverlay)
+            ?? this.addComponent(LevelSelectOverlay);
         this.setupLabels();
         this.scheduleOnce(() => {
             void applySavedFontToSubtree(this.node);
@@ -83,6 +114,12 @@ export class HomeScene extends Component {
         if (this.aboutButton) {
             this.aboutButton.node.on(Button.EventType.CLICK, this.onAboutButtonClick, this);
         }
+        if (this.challengeButton) {
+            this.challengeButton.node.on(Button.EventType.CLICK, this.onChallengeButtonClick, this);
+        }
+        if (this.achievementButton) {
+            this.achievementButton.node.on(Button.EventType.CLICK, this.onAchievementButtonClick, this);
+        }
     }
 
     /**
@@ -91,6 +128,37 @@ export class HomeScene extends Component {
     onPlayButtonClick() {
         console.log('开始游戏');
         this.switchToGameScene();
+    }
+
+    /** 首页是挑战玩法的唯一入口；进入演奏页后自动开始对应关卡。 */
+    onChallengeButtonClick() {
+        void this.openLevelSelect();
+    }
+
+    onAchievementButtonClick() {
+        void showAchievementOverlay(this.node);
+    }
+
+    private async openLevelSelect() {
+        if (!this.levelSelectOverlay) return;
+        // 本地进度立即打开，避免等待微信云调用时让玩家误以为按钮失效。
+        const localUnlocked = LevelProgressStore.getLocallyUnlockedLevelIds();
+        const selectLevel = (levelId: string) => {
+            ChallengeLaunchStore.request(levelId);
+            this.switchToGameScene();
+        };
+        this.levelSelectOverlay.open(localUnlocked, selectLevel);
+        try {
+            const stats = await AchievementCloudService.getStats();
+            if (Array.isArray(stats.unlockedLevelIds) && stats.unlockedLevelIds.length > 0) {
+                const merged = [...new Set([...localUnlocked, ...stats.unlockedLevelIds])];
+                if (this.node.isValid && this.levelSelectOverlay?.isOpen()) {
+                    this.levelSelectOverlay.open(merged, selectLevel);
+                }
+            }
+        } catch {
+            // 保持已打开的本地关卡列表。
+        }
     }
 
     /**
@@ -153,5 +221,7 @@ export class HomeScene extends Component {
         off(this.startBtn, this.onPlayButtonClick);
         off(this.settingsButton, this.onSettingsButtonClick);
         off(this.aboutButton, this.onAboutButtonClick);
+        off(this.challengeButton, this.onChallengeButtonClick);
+        off(this.achievementButton, this.onAchievementButtonClick);
     }
 }

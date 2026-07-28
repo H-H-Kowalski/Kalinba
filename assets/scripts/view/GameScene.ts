@@ -1,4 +1,4 @@
-import { _decorator, BlockInputEvents, Component, Button, Label, Node, director, sys } from 'cc';
+import { _decorator, BlockInputEvents, Component, Button, Game, Label, Node, director, game, sys } from 'cc';
 import { KalimbaManager } from '../manager/KalimbaManager';
 import { AudioManager } from '../manager/AudioManager';
 import { AudioSettingsStore } from '../manager/AudioSettingsStore';
@@ -13,6 +13,16 @@ import { PERFORMANCE_MAX_DURATION_MS, type PerformanceRecord } from '../manager/
 import { AchievementCloudService } from '../manager/AchievementCloudService';
 import { installShareLaunchCapture, takePendingSharedRecordId } from '../manager/PerformanceShareLaunch';
 import { getWx } from '../manager/WeChatNative';
+import { LevelProgressStore } from '../manager/LevelProgressStore';
+import { ChallengeLaunchStore } from '../manager/ChallengeLaunchStore';
+import { MetronomeController } from '../manager/MetronomeController';
+import { KalimbaKey } from '../KalimbaKey';
+import { ChallengeSession } from '../gameplay/ChallengeSession';
+import { getLevelById, getNextLevel } from '../gameplay/LevelCatalog';
+import type { JudgeEvent, LevelResult } from '../gameplay/LevelTypes';
+import { PracticeOverlay } from './PracticeOverlay';
+import { FallingNoteStage } from './FallingNoteStage';
+import { getAchievementById } from '../gameplay/AchievementCatalog';
 const { ccclass, property } = _decorator;
 
 /**
@@ -57,6 +67,17 @@ export class GameScene extends Component {
     @property(Button)
     replayLastButton: Button = null;
 
+    /** 可选：绑定演奏页的节拍器按钮；未绑定不影响自由弹奏。 */
+    @property(Button)
+    metronomeButton: Button = null;
+
+    /** 可选：显示“♩=80 / 关闭”等节拍器状态。 */
+    @property(Label)
+    metronomeStatusLabel: Label = null;
+
+    @property(Label)
+    challengeFeedbackLabel: Label = null;
+
     private audioManager: AudioManager = null;
     private _syncRetry = 0;
     private lastRecord: PerformanceRecord | null = null;
@@ -64,9 +85,23 @@ export class GameScene extends Component {
     private warnedInvalidRecordIconBinding = false;
     private warnedSameRecordIconBinding = false;
     private _playbackLocked = false;
+    private metronomeController: MetronomeController | null = null;
+    private challengeSession: ChallengeSession | null = null;
+    private challengeScore = 0;
+    private practiceOverlay: PracticeOverlay | null = null;
+    private fallingNoteStage: FallingNoteStage | null = null;
+    private lastChallengeLevelId = 'c1-01';
+    private activeChallengeLevelId: string | null = null;
+    private onGameHide = () => {
+        // 微信切到聊天、接电话或锁屏时不能让谱面继续跑；恢复后由玩家主动继续。
+        if (this.activeChallengeLevelId && this.challengeSession?.isActive() && !this.challengeSession.isPaused()) {
+            this.toggleChallengePause();
+        }
+    };
 
     start() {
         installShareLaunchCapture();
+        game.on(Game.EVENT_HIDE, this.onGameHide, this);
         if (!this.sheetMusicBackground) {
             this.sheetMusicBackground =
                 this.node.scene.getComponentInChildren(SheetMusicBackground) ?? null;
@@ -74,6 +109,12 @@ export class GameScene extends Component {
         }
         this.setupUI();
         this.setupAudioManager();
+        this.setupMetronome();
+        this.setupChallengeSession();
+        this.setupPracticeOverlay();
+        this.setupFallingNoteStage();
+        this.consumeChallengeLaunchSoon();
+        this.syncPendingChallengeResultsSoon();
         this.syncAudioFromStoreSoon();
         this.tryConsumeSharedRecordSoon();
         this.scheduleOnce(() => {
@@ -93,6 +134,7 @@ export class GameScene extends Component {
         this.recordStartButton?.node.on(Button.EventType.CLICK, this.onToggleRecordClick, this);
         this.recordShareButton?.node.on(Button.EventType.CLICK, this.onShareRecordClick, this);
         this.replayLastButton?.node.on(Button.EventType.CLICK, this.onReplayLastClick, this);
+        this.metronomeButton?.node.on(Button.EventType.CLICK, this.onMetronomeClick, this);
         if (this.recordShareButton) this.recordShareButton.interactable = false;
         this.refreshRecordButtons();
     }
@@ -133,6 +175,10 @@ export class GameScene extends Component {
         if (!this.replayLastButton) {
             const n = pickNode(['replaybutton', 'recordreplaybutton', 'replay_btn', 'btnreplay', 'replay_icon']);
             this.replayLastButton = n?.getComponent(Button) ?? n?.getComponentInChildren(Button) ?? null;
+        }
+        if (!this.metronomeButton) {
+            const n = pickNode(['metronomebutton', 'metronome_btn', 'tempobutton', 'tempo_btn']);
+            this.metronomeButton = n?.getComponent(Button) ?? n?.getComponentInChildren(Button) ?? null;
         }
         const rb = this.recordStartButton?.node ?? null;
         if (rb && !this.recordIconStartNode) {
@@ -177,6 +223,274 @@ export class GameScene extends Component {
         if (this.kalimbaManager) {
             this.audioManager = this.kalimbaManager.getAudioManager();
         }
+    }
+
+    private setupMetronome() {
+        this.metronomeController = this.getComponent(MetronomeController)
+            ?? this.addComponent(MetronomeController);
+        this.metronomeController.audioManager = this.audioManager;
+        this.refreshMetronomeUI();
+    }
+
+    private setupChallengeSession() {
+        this.challengeSession = this.getComponent(ChallengeSession)
+            ?? this.addComponent(ChallengeSession);
+        this.challengeSession.audioManager = this.audioManager;
+    }
+
+    private setupPracticeOverlay() {
+        this.practiceOverlay = this.getComponent(PracticeOverlay)
+            ?? this.addComponent(PracticeOverlay);
+        this.practiceOverlay.bind({
+            onMetronome: () => { void this.toggleMetronome(); },
+            onRetry: () => { void this.startChallengeLevel(this.lastChallengeLevelId); },
+            onProgress: () => { void this.openProgressPanel(); },
+            onTempoDown: () => this.adjustMetronomeBpm(-5),
+            onTempoUp: () => this.adjustMetronomeBpm(5),
+            onExitChallenge: () => this.exitChallengeToHome(),
+        });
+        this.practiceOverlay.setChallengeIdle();
+        this.refreshMetronomeUI();
+    }
+
+    private setupFallingNoteStage() {
+        this.fallingNoteStage = this.getComponent(FallingNoteStage)
+            ?? this.addComponent(FallingNoteStage);
+        this.fallingNoteStage.setAudioClock(() => this.audioManager?.getAudioCurrentTime() ?? null);
+    }
+
+    private consumeChallengeLaunchSoon() {
+        this.scheduleOnce(() => {
+            const levelId = ChallengeLaunchStore.take();
+            if (levelId) void this.startChallengeLevel(levelId);
+        }, 0.12);
+    }
+
+    private async openProgressPanel() {
+        this.practiceOverlay?.showProgress('正在读取成长记录…');
+        try {
+            const stats = await AchievementCloudService.getStats();
+            const titles = stats.achievementIds
+                .map((id) => getAchievementById(id)?.title ?? id)
+                .slice(0, 5);
+            const achievements = titles.length > 0 ? titles.join(' · ') : '还没有解锁成就';
+            const unlockedCount = Array.isArray(stats.unlockedLevelIds) ? stats.unlockedLevelIds.length : 1;
+            this.practiceOverlay?.showProgress(
+                `成长记录\n\n已解锁 ${unlockedCount} / 9 关\n累计 ${stats.totalStars} 颗星 · ${stats.totalNotes} 音\n最高连击 ${stats.maxCombo}\n\n成就：${achievements}`,
+            );
+        } catch {
+            this.practiceOverlay?.showProgress('成长记录暂未同步。\n联网并部署云函数后会自动保存到微信账号。');
+        }
+    }
+
+    /** 先展示关卡说明/教程，由玩家点击“开始挑战”后再解锁 WebAudio 并启动时间轴。 */
+    public async startChallengeLevel(levelId: string): Promise<void> {
+        const level = getLevelById(levelId);
+        if (!level || !this.challengeSession || !this.fallingNoteStage) {
+            showToast(this.node, '关卡暂不可用', 1.2);
+            return;
+        }
+        this.lastChallengeLevelId = level.id;
+        this.activeChallengeLevelId = level.id;
+        this.challengeSession.stop();
+        this.metronomeController?.stopMetronome();
+        this.challengeScore = 0;
+        this.refreshChallengeFeedback('准备开始');
+        this.practiceOverlay?.hideResult();
+        this.practiceOverlay?.setChallengeMode(true);
+        this.practiceOverlay?.setChallengeStarted(level);
+        if (this.sheetMusicBackground?.node) this.sheetMusicBackground.node.active = false;
+        this.fallingNoteStage.prepareLevel(level, {
+            onStart: () => { void this.beginPreparedChallenge(level.id); },
+            onExit: () => this.exitChallengeToHome(),
+            onTogglePause: () => this.toggleChallengePause(),
+            onHelp: () => this.openChallengeTutorial(),
+        });
+    }
+
+    private async beginPreparedChallenge(levelId: string): Promise<void> {
+        const level = getLevelById(levelId);
+        if (!level || !this.challengeSession || !this.fallingNoteStage || this.activeChallengeLevelId !== levelId) return;
+        this.challengeSession.stop();
+        this.challengeScore = 0;
+        this.practiceOverlay?.hideResult();
+        this.practiceOverlay?.setChallengeStarted(level);
+        const started = await this.challengeSession.begin(
+            level,
+            (result) => this.onChallengeFinished(result),
+            (event) => this.onChallengeJudge(event),
+        );
+        if (!started) {
+            this.fallingNoteStage.showError('音频初始化失败，请返回后重新进入');
+            return;
+        }
+        this.fallingNoteStage.startLevel(level, this.challengeSession.getStartedAtSec());
+        this.refreshChallengeTarget();
+        showToast(this.node, `${level.title}：3 拍预备后开始`, 1.2);
+    }
+
+    private toggleChallengePause() {
+        const session = this.challengeSession;
+        const stage = this.fallingNoteStage;
+        if (!session?.isActive() || !stage) return;
+        if (session.isPaused()) {
+            if (!session.resume()) return;
+            stage.syncStartedAt(session.getStartedAtSec());
+            stage.setPaused(false);
+            showToast(this.node, '继续挑战', 0.8);
+            return;
+        }
+        if (session.pause()) {
+            stage.setPaused(true);
+            showToast(this.node, '挑战已暂停', 0.8);
+        }
+    }
+
+    private openChallengeTutorial() {
+        const session = this.challengeSession;
+        const stage = this.fallingNoteStage;
+        if (!stage || !this.activeChallengeLevelId) return;
+        const wasPaused = session?.isPaused() ?? false;
+        const pausedForHelp = !!session?.isActive() && !wasPaused && !!session.pause();
+        if (pausedForHelp) stage.setPaused(true);
+        stage.showHelp(() => {
+            if (!session?.isActive()) return;
+            if (wasPaused) {
+                stage.setPaused(true);
+                return;
+            }
+            if (pausedForHelp && session.resume()) {
+                stage.syncStartedAt(session.getStartedAtSec());
+                stage.setPaused(false);
+            }
+        });
+    }
+
+    private exitChallengeToHome() {
+        this.challengeSession?.stop();
+        this.fallingNoteStage?.stop();
+        this.metronomeController?.stopMetronome();
+        this.practiceOverlay?.setChallengeMode(false);
+        if (this.sheetMusicBackground?.node) this.sheetMusicBackground.node.active = true;
+        KalimbaKey.setGuidanceKey(null);
+        this.activeChallengeLevelId = null;
+        this.audioManager?.stopAllSounds();
+        const sm = SceneManager.getInstance();
+        if (sm) sm.loadHomeScene();
+        else director.loadScene(SceneManager.SCENE_NAMES.HOME);
+    }
+
+    private onChallengeJudge(event: JudgeEvent) {
+        this.challengeScore += event.scoreDelta;
+        const text = event.grade === 'perfect' ? 'Perfect'
+            : event.grade === 'good' ? 'Good'
+                : event.grade === 'miss' ? 'Miss' : '按错了';
+        this.refreshChallengeFeedback(`${text}  连击 ${event.combo}  分数 ${this.challengeScore}`);
+        this.fallingNoteStage?.onJudge(event, this.challengeScore);
+        this.refreshChallengeTarget();
+    }
+
+    private onChallengeFinished(result: LevelResult) {
+        KalimbaKey.setGuidanceKey(null);
+        this.fallingNoteStage?.finish(result.score);
+        if (this.sheetMusicBackground?.node) this.sheetMusicBackground.node.active = true;
+        LevelProgressStore.recordResult(result);
+        const starText = result.stars > 0 ? `${result.stars} 星通关` : '再试一次';
+        this.refreshChallengeFeedback(`${starText} · ${result.score} 分`);
+        void this.reportChallengeResultAsync(result);
+        showToast(this.node, `${starText}：${result.score} 分，最高连击 ${result.maxCombo}`, 2.3);
+        const level = getLevelById(result.levelId);
+        const nextLevel = result.stars > 0 ? getNextLevel(result.levelId) : null;
+        if (nextLevel) this.lastChallengeLevelId = nextLevel.id;
+        this.practiceOverlay?.showResult(
+            result,
+            level?.title ?? '练习完成',
+            nextLevel ? `下一关：${nextLevel.title}` : '再练一次',
+        );
+    }
+
+    private async reportChallengeResultAsync(result: LevelResult) {
+        try {
+            const stats = await AchievementCloudService.reportLevelResult(result);
+            LevelProgressStore.markSynced(result.levelId);
+            // 只在本局确实解锁新成就时提示，避免每次结算都刷屏。
+            if (stats.achievementIds.length > 0) {
+                console.log('[Achievement] synced', {
+                    stars: stats.totalStars,
+                    unlockedLevels: stats.unlockedLevelIds,
+                    achievements: stats.achievementIds,
+                });
+            }
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : 'unknown error';
+            console.warn(`[Challenge] cloud sync failed: ${msg}`);
+        }
+    }
+
+    private syncPendingChallengeResultsSoon() {
+        this.scheduleOnce(() => {
+            void this.syncPendingChallengeResults();
+        }, 0.3);
+    }
+
+    private async syncPendingChallengeResults() {
+        for (const result of LevelProgressStore.getPending()) {
+            try {
+                await AchievementCloudService.reportLevelResult(result);
+                LevelProgressStore.markSynced(result.levelId);
+            } catch {
+                // 当前网络不可用时保留队列，下次启动继续补传。
+                return;
+            }
+        }
+    }
+
+    private refreshChallengeFeedback(text: string) {
+        if (this.challengeFeedbackLabel) this.challengeFeedbackLabel.string = text;
+        const target = this.challengeSession?.getExpectedKeyIndex();
+        const targetText = target === null ? '' : `下一音：${KalimbaKey.getChallengeDisplayNote(target)}`;
+        this.practiceOverlay?.setJudgeFeedback(text, targetText);
+    }
+
+    private refreshChallengeTarget() {
+        const target = this.challengeSession?.getExpectedKeyIndex() ?? null;
+        KalimbaKey.setGuidanceKey(target);
+        const targetText = target === null ? '' : `下一音：${KalimbaKey.getChallengeDisplayNote(target)}`;
+        this.practiceOverlay?.setJudgeFeedback(
+            this.challengeFeedbackLabel?.string ?? `分数 ${this.challengeScore}`,
+            targetText,
+        );
+    }
+
+    /** 可直接绑定给节拍器按钮。首次点击也会完成 WebAudio 的用户手势解锁。 */
+    public onMetronomeClick() {
+        void this.toggleMetronome();
+    }
+
+    public async toggleMetronome(): Promise<void> {
+        const metronome = this.metronomeController;
+        if (!metronome) return;
+        const running = await metronome.toggle();
+        this.refreshMetronomeUI();
+        showToast(this.node, running ? `节拍器 ${metronome.getSettings().bpm} BPM` : '节拍器已关闭', 1.1);
+    }
+
+    /** 供 Inspector 的 +/- 按钮或后续节拍器面板调用。 */
+    public adjustMetronomeBpm(delta: number) {
+        const metronome = this.metronomeController;
+        if (!metronome) return;
+        metronome.setBpm(metronome.getSettings().bpm + Math.round(delta));
+        this.refreshMetronomeUI();
+    }
+
+    private refreshMetronomeUI() {
+        const metronome = this.metronomeController;
+        if (!metronome) return;
+        const s = metronome.getSettings();
+        if (this.metronomeStatusLabel) {
+            this.metronomeStatusLabel.string = metronome.isRunning() ? `♩ = ${s.bpm}` : '节拍器';
+        }
+        this.practiceOverlay?.setMetronome(metronome.isRunning(), s.bpm);
     }
 
     /** 场景切回后兜底同步一次音频设置，避免组件启动顺序导致配置未生效 */
@@ -404,6 +718,10 @@ export class GameScene extends Component {
     }
 
     onBackButtonClick() {
+        if (this.activeChallengeLevelId) {
+            this.exitChallengeToHome();
+            return;
+        }
         if (this.audioManager) {
             this.audioManager.stopAllSounds();
         }
@@ -426,6 +744,7 @@ export class GameScene extends Component {
     }
 
     onDestroy() {
+        game.off(Game.EVENT_HIDE, this.onGameHide, this);
         const offBtn = (btn: Button | null, handler: () => void) => {
             const n = btn?.node;
             if (n && n.isValid) {
@@ -437,11 +756,16 @@ export class GameScene extends Component {
         offBtn(this.recordStartButton, this.onToggleRecordClick);
         offBtn(this.recordShareButton, this.onShareRecordClick);
         offBtn(this.replayLastButton, this.onReplayLastClick);
+        offBtn(this.metronomeButton, this.onMetronomeClick);
 
         if (this.audioManager) {
             this.audioManager.stopAllSounds();
         }
         this.sheetMusicBackground?.setAutoScrollRunning(false);
+        this.metronomeController?.stopMetronome();
+        this.challengeSession?.stop();
+        this.fallingNoteStage?.stop();
+        KalimbaKey.setGuidanceKey(null);
         this.setPlaybackLock(false);
         PerformanceRecorder.stop();
         PerformancePlayer.stop();

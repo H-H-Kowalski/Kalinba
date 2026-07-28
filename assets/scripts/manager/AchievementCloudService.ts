@@ -1,4 +1,5 @@
 import { getWx } from './WeChatNative';
+import type { LevelResult } from '../gameplay/LevelTypes';
 
 type CallResult<T> = {
     result?: T;
@@ -15,6 +16,13 @@ export type UserAchievementStats = {
     lastActiveDateKey: string;
     bestLevelScore: number;
     levelScores: Record<string, number>;
+    levelProgress: Record<string, { score: number; stars: number; maxCombo: number; updatedAtMs: number }>;
+    totalNotes: number;
+    totalStars: number;
+    maxCombo: number;
+    completedLevelIds: string[];
+    unlockedLevelIds: string[];
+    achievementIds: string[];
     updatedAtMs: number;
 };
 
@@ -58,6 +66,23 @@ export class AchievementCloudService {
         const result = await callWxCloudFunction<UpsertStatsResult>('upsertUserAchievementStats', {
             levelId: id,
             levelScore: safeScore,
+            levelStars: 0,
+            levelMaxCombo: 0,
+            playedNoteCount: 0,
+        });
+        if (!result?.stats) throw new Error('missing stats');
+        return result.stats;
+    }
+
+    static async reportLevelResult(levelResult: LevelResult): Promise<UserAchievementStats> {
+        const levelId = (levelResult?.levelId ?? '').trim();
+        if (!levelId) throw new Error('levelId is required');
+        const result = await callWxCloudFunction<UpsertStatsResult>('upsertUserAchievementStats', {
+            levelId,
+            levelScore: Math.max(0, Math.floor(Number(levelResult.score) || 0)),
+            levelStars: Math.max(0, Math.min(3, Math.floor(Number(levelResult.stars) || 0))),
+            levelMaxCombo: Math.max(0, Math.floor(Number(levelResult.maxCombo) || 0)),
+            playedNoteCount: Math.max(0, Math.floor(Number(levelResult.playedNoteCount) || 0)),
         });
         if (!result?.stats) throw new Error('missing stats');
         return result.stats;

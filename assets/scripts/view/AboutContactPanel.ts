@@ -44,7 +44,7 @@ export function showAboutContactPanel(canvas: Node, info: AboutContactInfo = DEF
     const maskUi = mask.addComponent(UITransform);
     maskUi.setContentSize(cw, ch);
     const maskG = mask.addComponent(Graphics);
-    maskG.fillColor = new Color(0, 0, 0, 170);
+    maskG.fillColor = new Color(73, 53, 29, 135);
     maskG.rect(-cw * 0.5, -ch * 0.5, cw, ch);
     maskG.fill();
     const maskBtn = mask.addComponent(Button);
@@ -59,11 +59,15 @@ export function showAboutContactPanel(canvas: Node, info: AboutContactInfo = DEF
     panel.addComponent(BlockInputEvents);
 
     const panelBg = panel.addComponent(Graphics);
-    panelBg.fillColor = new Color(32, 36, 44, 250);
+    panelBg.fillColor = new Color(255, 239, 194, 253);
     const hw = panelW * 0.5;
     const hh = panelH * 0.5;
     panelBg.roundRect(-hw, -hh, panelW, panelH, 12);
     panelBg.fill();
+    panelBg.strokeColor = new Color(185, 99, 42, 220);
+    panelBg.lineWidth = 2;
+    panelBg.roundRect(-hw, -hh, panelW, panelH, 12);
+    panelBg.stroke();
 
     const closeRoot = () => {
         if (root.isValid) root.destroy();
@@ -76,7 +80,7 @@ export function showAboutContactPanel(canvas: Node, info: AboutContactInfo = DEF
     const titleLab = title.addComponent(Label);
     titleLab.string = '关于作者';
     titleLab.fontSize = 26;
-    titleLab.color = Color.WHITE;
+    titleLab.color = new Color(121, 59, 27, 255);
     titleLab.horizontalAlign = Label.HorizontalAlign.CENTER;
     title.addComponent(UITransform).setContentSize(panelW - 40, 40);
     title.setPosition(0, hh - 36, 0);
@@ -98,7 +102,7 @@ export function showAboutContactPanel(canvas: Node, info: AboutContactInfo = DEF
         lab.string = lineText;
         lab.fontSize = 20;
         lab.lineHeight = 26;
-        lab.color = new Color(220, 224, 230, 255);
+        lab.color = new Color(105, 75, 44, 255);
         lab.horizontalAlign = Label.HorizontalAlign.LEFT;
         lab.verticalAlign = Label.VerticalAlign.CENTER;
         lab.overflow = Label.Overflow.SHRINK;
@@ -108,7 +112,7 @@ export function showAboutContactPanel(canvas: Node, info: AboutContactInfo = DEF
         btnNode.setPosition(panelW * 0.5 - 24 - 44, 0, 0);
         btnNode.addComponent(UITransform).setContentSize(88, 44);
         const btnBg = btnNode.addComponent(Graphics);
-        btnBg.fillColor = new Color(70, 130, 200, 255);
+        btnBg.fillColor = new Color(185, 99, 42, 255);
         btnBg.roundRect(-44, -22, 88, 44, 8);
         btnBg.fill();
         const btn = btnNode.addComponent(Button);
@@ -118,7 +122,7 @@ export function showAboutContactPanel(canvas: Node, info: AboutContactInfo = DEF
         const bl = btnLabN.addComponent(Label);
         bl.string = '复制';
         bl.fontSize = 20;
-        bl.color = Color.WHITE;
+        bl.color = new Color(255, 244, 204, 255);
         btnLabN.addComponent(UITransform).setContentSize(80, 40);
 
         btn.node.on(Button.EventType.CLICK, async (e: Event) => {
@@ -137,7 +141,7 @@ export function showAboutContactPanel(canvas: Node, info: AboutContactInfo = DEF
     closeUi.setContentSize(120, 44);
     closeBtnNode.setPosition(0, -hh + 52, 0);
     const cg = closeBtnNode.addComponent(Graphics);
-    cg.fillColor = new Color(90, 95, 105, 255);
+    cg.fillColor = new Color(122, 87, 48, 255);
     cg.roundRect(-60, -22, 120, 44, 8);
     cg.fill();
     const cbtn = closeBtnNode.addComponent(Button);
@@ -147,7 +151,7 @@ export function showAboutContactPanel(canvas: Node, info: AboutContactInfo = DEF
     const closeLab = closeLabN.addComponent(Label);
     closeLab.string = '关闭';
     closeLab.fontSize = 22;
-    closeLab.color = Color.WHITE;
+    closeLab.color = new Color(255, 244, 204, 255);
     closeLabN.addComponent(UITransform).setContentSize(100, 40);
     cbtn.node.on(Button.EventType.CLICK, (e: Event) => {
         e.propagationStopped = true;

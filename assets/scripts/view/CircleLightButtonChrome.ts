@@ -12,13 +12,13 @@ const { ccclass, property } = _decorator;
 @ccclass('CircleLightButtonChrome')
 export class CircleLightButtonChrome extends Component {
     @property({ tooltip: '圆形填充色（浅色），常驻显示' })
-    lightFillColor: Color = new Color(245, 248, 252, 255);
+    lightFillColor: Color = new Color(255, 239, 194, 255);
 
     @property({ tooltip: '是否绘制左半圆叠层（默认关）' })
     useLeftMask: boolean = false;
 
     @property({ tooltip: '左半圆蒙层（仅当 useLeftMask 为 true）' })
-    leftMaskColor: Color = new Color(255, 255, 255, 70);
+    leftMaskColor: Color = new Color(255, 247, 218, 70);
 
     @property({ tooltip: '相对按钮内切圆的边距（像素）' })
     circlePadding: number = 2;
