@@ -1,5 +1,6 @@
 import { sys } from 'cc';
 import { getWx } from './WeChatNative';
+import { ChallengeLaunchStore } from './ChallengeLaunchStore';
 
 const KEY = 'kalinba_pending_share_record_id_v1';
 let installed = false;
@@ -18,6 +19,10 @@ function parseQueryFromOptions(options: unknown): void {
     const rid = typeof query?.rid === 'string' ? query.rid : '';
     if (rid) {
         savePendingRecordId(rid);
+    }
+    const challenge = typeof query?.challenge === 'string' ? query.challenge : '';
+    if (/^c[1-3]-0[1-3]$/.test(challenge)) {
+        ChallengeLaunchStore.request(challenge);
     }
 }
 

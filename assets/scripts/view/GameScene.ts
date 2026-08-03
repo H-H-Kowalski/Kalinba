@@ -1,4 +1,4 @@
-import { _decorator, BlockInputEvents, Component, Button, Game, Label, Node, director, game, sys } from 'cc';
+import { _decorator, BlockInputEvents, Button, Color, Component, Game, Graphics, Label, Node, UITransform, director, game, sys } from 'cc';
 import { KalimbaManager } from '../manager/KalimbaManager';
 import { AudioManager } from '../manager/AudioManager';
 import { AudioSettingsStore } from '../manager/AudioSettingsStore';
@@ -23,6 +23,7 @@ import type { JudgeEvent, LevelResult } from '../gameplay/LevelTypes';
 import { PracticeOverlay } from './PracticeOverlay';
 import { FallingNoteStage } from './FallingNoteStage';
 import { getAchievementById } from '../gameplay/AchievementCatalog';
+import { EditableCaption } from './EditableCaption';
 const { ccclass, property } = _decorator;
 
 /**
@@ -88,10 +89,13 @@ export class GameScene extends Component {
     private metronomeController: MetronomeController | null = null;
     private challengeSession: ChallengeSession | null = null;
     private challengeScore = 0;
+    private challengeRhythmEnabled = false;
     private practiceOverlay: PracticeOverlay | null = null;
     private fallingNoteStage: FallingNoteStage | null = null;
+    private editableCaption: EditableCaption | null = null;
     private lastChallengeLevelId = 'c1-01';
     private activeChallengeLevelId: string | null = null;
+    private challengeChromeState = new Map<Node, boolean>();
     private onGameHide = () => {
         // 微信切到聊天、接电话或锁屏时不能让谱面继续跑；恢复后由玩家主动继续。
         if (this.activeChallengeLevelId && this.challengeSession?.isActive() && !this.challengeSession.isPaused()) {
@@ -108,6 +112,7 @@ export class GameScene extends Component {
             console.log(`[AutoScroll] GameScene.start: 自动查找 sheetMusicBackground=${!!this.sheetMusicBackground}`);
         }
         this.setupUI();
+        this.editableCaption = this.node.scene.getComponentInChildren(EditableCaption) ?? null;
         this.setupAudioManager();
         this.setupMetronome();
         this.setupChallengeSession();
@@ -137,6 +142,45 @@ export class GameScene extends Component {
         this.metronomeButton?.node.on(Button.EventType.CLICK, this.onMetronomeClick, this);
         if (this.recordShareButton) this.recordShareButton.interactable = false;
         this.refreshRecordButtons();
+        this.organizeFreePlaySideButtons();
+    }
+
+    /** 自由演奏右侧功能组：设置、选谱、录制、回放、分享，统一圆形浅色按钮底。 */
+    private organizeFreePlaySideButtons() {
+        const chooseNode = this.sheetMusicBackground?.node.getChildByName('chooseButton') ?? null;
+        const controls: Array<{ node: Node | null; y: number }> = [
+            { node: this.settingsButton?.node ?? null, y: 125 },
+            { node: chooseNode, y: 55 },
+            { node: this.recordStartButton?.node ?? null, y: -15 },
+            { node: this.replayLastButton?.node ?? null, y: -85 },
+            { node: this.recordShareButton?.node ?? null, y: -155 },
+        ];
+        const rightX = Math.abs(this.settingsButton?.node.position.x ?? 605) || 605;
+        for (const item of controls) {
+            const node = item.node;
+            const parent = node?.parent;
+            if (!node?.isValid || !parent?.isValid) continue;
+            node.setPosition(rightX, item.y, node.position.z);
+            const chromeName = `${node.name}_Chrome`;
+            let chrome = parent.getChildByName(chromeName);
+            if (!chrome) {
+                chrome = new Node(chromeName);
+                chrome.layer = node.layer;
+                chrome.setParent(parent);
+                chrome.addComponent(UITransform).setContentSize(56, 56);
+                const graphics = chrome.addComponent(Graphics);
+                graphics.fillColor = new Color(255, 241, 200, 242);
+                graphics.circle(0, 0, 27);
+                graphics.fill();
+                graphics.strokeColor = new Color(139, 68, 31, 210);
+                graphics.lineWidth = 2;
+                graphics.circle(0, 0, 27);
+                graphics.stroke();
+            }
+            chrome.setPosition(rightX, item.y, 0);
+            chrome.setSiblingIndex(node.getSiblingIndex());
+            node.setSiblingIndex(chrome.getSiblingIndex() + 1);
+        }
     }
 
     /** 防止场景返回后序列化引用丢失：按常见节点名自动兜底绑定录制UI */
@@ -248,6 +292,8 @@ export class GameScene extends Component {
             onTempoDown: () => this.adjustMetronomeBpm(-5),
             onTempoUp: () => this.adjustMetronomeBpm(5),
             onExitChallenge: () => this.exitChallengeToHome(),
+            onExitFree: () => this.onBackButtonClick(),
+            onShareResult: (result, levelTitle, rankTitle) => this.shareChallengeResult(result, levelTitle, rankTitle),
         });
         this.practiceOverlay.setChallengeIdle();
         this.refreshMetronomeUI();
@@ -256,7 +302,7 @@ export class GameScene extends Component {
     private setupFallingNoteStage() {
         this.fallingNoteStage = this.getComponent(FallingNoteStage)
             ?? this.addComponent(FallingNoteStage);
-        this.fallingNoteStage.setAudioClock(() => this.audioManager?.getAudioCurrentTime() ?? null);
+        this.fallingNoteStage.setTimelineClock(() => this.challengeSession?.getCurrentTimeSec() ?? null);
     }
 
     private consumeChallengeLaunchSoon() {
@@ -294,17 +340,21 @@ export class GameScene extends Component {
         this.activeChallengeLevelId = level.id;
         this.challengeSession.stop();
         this.metronomeController?.stopMetronome();
+        this.challengeRhythmEnabled = false;
         this.challengeScore = 0;
         this.refreshChallengeFeedback('准备开始');
         this.practiceOverlay?.hideResult();
         this.practiceOverlay?.setChallengeMode(true);
         this.practiceOverlay?.setChallengeStarted(level);
+        this.setChallengeChromeHidden(true);
+        this.editableCaption?.setText(`《${level.title}》`);
         if (this.sheetMusicBackground?.node) this.sheetMusicBackground.node.active = false;
         this.fallingNoteStage.prepareLevel(level, {
             onStart: () => { void this.beginPreparedChallenge(level.id); },
             onExit: () => this.exitChallengeToHome(),
             onTogglePause: () => this.toggleChallengePause(),
             onHelp: () => this.openChallengeTutorial(),
+            onToggleRhythm: () => { void this.toggleChallengeRhythm(); },
         });
     }
 
@@ -337,13 +387,52 @@ export class GameScene extends Component {
             if (!session.resume()) return;
             stage.syncStartedAt(session.getStartedAtSec());
             stage.setPaused(false);
+            if (this.challengeRhythmEnabled) void this.startChallengeRhythmAligned();
             showToast(this.node, '继续挑战', 0.8);
             return;
         }
         if (session.pause()) {
+            if (this.challengeRhythmEnabled) {
+                this.metronomeController?.stopMetronome();
+                stage.setRhythmEnabled(true, true);
+            }
             stage.setPaused(true);
             showToast(this.node, '挑战已暂停', 0.8);
         }
+    }
+
+    private async toggleChallengeRhythm() {
+        if (!this.challengeSession?.isActive() || !this.activeChallengeLevelId) return;
+        if (this.challengeRhythmEnabled) {
+            this.challengeRhythmEnabled = false;
+            this.metronomeController?.stopMetronome();
+            this.fallingNoteStage?.setRhythmEnabled(false);
+            showToast(this.node, '挑战节奏已关闭', 1.0);
+            return;
+        }
+        this.challengeRhythmEnabled = true;
+        const started = await this.startChallengeRhythmAligned();
+        if (!started) {
+            this.challengeRhythmEnabled = false;
+            this.fallingNoteStage?.setRhythmEnabled(false);
+            showToast(this.node, '节奏音暂时无法启动', 1.2);
+            return;
+        }
+        showToast(this.node, '挑战节奏已开启（不计入录制）', 1.2);
+    }
+
+    private async startChallengeRhythmAligned(): Promise<boolean> {
+        const session = this.challengeSession;
+        const metronome = this.metronomeController;
+        const level = this.activeChallengeLevelId ? getLevelById(this.activeChallengeLevelId) : null;
+        if (!session?.isActive() || session.isPaused() || !metronome || !level) return false;
+        const now = session.getCurrentTimeSec();
+        if (now === null || !Number.isFinite(now)) return false;
+        const elapsedSec = now - session.getStartedAtSec();
+        const started = await metronome.startAligned(elapsedSec, level.bpm, level.beatsPerBar);
+        this.fallingNoteStage?.setRhythmEnabled(started);
+        this.refreshMetronomeUI();
+        return started;
     }
 
     private openChallengeTutorial() {
@@ -352,7 +441,13 @@ export class GameScene extends Component {
         if (!stage || !this.activeChallengeLevelId) return;
         const wasPaused = session?.isPaused() ?? false;
         const pausedForHelp = !!session?.isActive() && !wasPaused && !!session.pause();
-        if (pausedForHelp) stage.setPaused(true);
+        if (pausedForHelp) {
+            if (this.challengeRhythmEnabled) {
+                this.metronomeController?.stopMetronome();
+                stage.setRhythmEnabled(true, true);
+            }
+            stage.setPaused(true);
+        }
         stage.showHelp(() => {
             if (!session?.isActive()) return;
             if (wasPaused) {
@@ -362,6 +457,7 @@ export class GameScene extends Component {
             if (pausedForHelp && session.resume()) {
                 stage.syncStartedAt(session.getStartedAtSec());
                 stage.setPaused(false);
+                if (this.challengeRhythmEnabled) void this.startChallengeRhythmAligned();
             }
         });
     }
@@ -370,8 +466,9 @@ export class GameScene extends Component {
         this.challengeSession?.stop();
         this.fallingNoteStage?.stop();
         this.metronomeController?.stopMetronome();
+        this.challengeRhythmEnabled = false;
         this.practiceOverlay?.setChallengeMode(false);
-        if (this.sheetMusicBackground?.node) this.sheetMusicBackground.node.active = true;
+        this.setChallengeChromeHidden(false);
         KalimbaKey.setGuidanceKey(null);
         this.activeChallengeLevelId = null;
         this.audioManager?.stopAllSounds();
@@ -384,7 +481,7 @@ export class GameScene extends Component {
         this.challengeScore += event.scoreDelta;
         const text = event.grade === 'perfect' ? 'Perfect'
             : event.grade === 'good' ? 'Good'
-                : event.grade === 'miss' ? 'Miss' : '按错了';
+                : event.grade === 'bad' ? 'Bad' : 'Miss';
         this.refreshChallengeFeedback(`${text}  连击 ${event.combo}  分数 ${this.challengeScore}`);
         this.fallingNoteStage?.onJudge(event, this.challengeScore);
         this.refreshChallengeTarget();
@@ -392,8 +489,12 @@ export class GameScene extends Component {
 
     private onChallengeFinished(result: LevelResult) {
         KalimbaKey.setGuidanceKey(null);
+        this.metronomeController?.stopMetronome();
+        this.challengeRhythmEnabled = false;
+        this.fallingNoteStage?.setRhythmEnabled(false);
         this.fallingNoteStage?.finish(result.score);
-        if (this.sheetMusicBackground?.node) this.sheetMusicBackground.node.active = true;
+        // 结算仍属于挑战模式，不能在失败后重新露出普通弹奏的琴谱和控制栏。
+        if (this.sheetMusicBackground?.node) this.sheetMusicBackground.node.active = false;
         LevelProgressStore.recordResult(result);
         const starText = result.stars > 0 ? `${result.stars} 星通关` : '再试一次';
         this.refreshChallengeFeedback(`${starText} · ${result.score} 分`);
@@ -407,6 +508,51 @@ export class GameScene extends Component {
             level?.title ?? '练习完成',
             nextLevel ? `下一关：${nextLevel.title}` : '再练一次',
         );
+    }
+
+    private shareChallengeResult(result: LevelResult, levelTitle: string, rankTitle: string) {
+        const wxApi = getWx() as {
+            shareAppMessage?: (arg: { title?: string; query?: string }) => void;
+        } | undefined;
+        if (!wxApi?.shareAppMessage) {
+            showToast(this.node, '微信真机中可分享挑战成绩', 1.6);
+            return;
+        }
+        try {
+            wxApi.shareAppMessage({
+                title: `我在《${levelTitle}》挑战获得 ${result.stars} 星，成为「${rankTitle}」！`,
+                query: `challenge=${encodeURIComponent(result.levelId)}`,
+            });
+            showToast(this.node, '已拉起微信分享', 1.3);
+        } catch (e) {
+            const message = e instanceof Error ? e.message : 'unknown error';
+            showToast(this.node, `分享失败：${message}`, 1.8);
+        }
+    }
+
+    private setChallengeChromeHidden(hidden: boolean) {
+        const candidates = [
+            this.backButton?.node,
+            this.settingsButton?.node,
+            this.recordStartButton?.node,
+            this.recordShareButton?.node,
+            this.replayLastButton?.node,
+            this.metronomeButton?.node,
+            this.metronomeStatusLabel?.node,
+            this.challengeFeedbackLabel?.node,
+        ];
+        const nodes = [...new Set(candidates.filter((node): node is Node => !!node?.isValid))];
+        if (hidden) {
+            for (const node of nodes) {
+                if (!this.challengeChromeState.has(node)) this.challengeChromeState.set(node, node.active);
+                node.active = false;
+            }
+            return;
+        }
+        for (const [node, wasActive] of this.challengeChromeState) {
+            if (node.isValid) node.active = wasActive;
+        }
+        this.challengeChromeState.clear();
     }
 
     private async reportChallengeResultAsync(result: LevelResult) {
@@ -730,7 +876,7 @@ export class GameScene extends Component {
         if (sm) {
             sm.loadHomeScene();
         } else {
-            console.log('切换到首页场景');
+            director.loadScene(SceneManager.SCENE_NAMES.HOME);
         }
     }
 
@@ -765,6 +911,7 @@ export class GameScene extends Component {
         this.metronomeController?.stopMetronome();
         this.challengeSession?.stop();
         this.fallingNoteStage?.stop();
+        this.setChallengeChromeHidden(false);
         KalimbaKey.setGuidanceKey(null);
         this.setPlaybackLock(false);
         PerformanceRecorder.stop();

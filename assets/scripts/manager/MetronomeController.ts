@@ -34,12 +34,14 @@ export class MetronomeController extends Component {
         if (!this.running || !this.audioManager) return;
         const now = this.audioManager.getAudioCurrentTime();
         if (!Number.isFinite(now)) return;
-        const interval = 60 / this.settings.bpm;
+        const subdivisionFactor = this.settings.subdivision / 4;
+        const interval = 60 / this.settings.bpm / subdivisionFactor;
+        const ticksPerBar = this.settings.beatsPerBar * subdivisionFactor;
         const horizon = now + Math.max(0.05, this.lookAheadSec);
         while (this.nextBeatAt <= horizon) {
             const accented = this.settings.accentFirstBeat && this.beatInBar === 0;
             this.audioManager.scheduleMetronomeTick(this.nextBeatAt, accented);
-            this.beatInBar = (this.beatInBar + 1) % this.settings.beatsPerBar;
+            this.beatInBar = (this.beatInBar + 1) % ticksPerBar;
             this.nextBeatAt += interval;
         }
     }
@@ -56,6 +58,36 @@ export class MetronomeController extends Component {
         this.nextBeatAt = now + 0.045;
         this.running = true;
         MetronomeSettingsStore.save({ enabled: true });
+        return true;
+    }
+
+    /** 挑战模式：从歌曲已进行的时间推算下一拍，并与下落谱面重新对齐。 */
+    async startAligned(elapsedSec: number, bpm: number, beatsPerBar: number): Promise<boolean> {
+        if (!this.audioManager) return false;
+        const ready = await this.audioManager.resumeWebAudio();
+        if (!ready) return false;
+        const audioNow = this.audioManager.getAudioCurrentTime();
+        if (!Number.isFinite(audioNow)) return false;
+        // 关卡 BPM 仅本局生效，不覆盖玩家在自由演奏中保存的速度。
+        this.settings = {
+            ...this.settings,
+            bpm: Math.max(40, Math.min(220, Math.round(bpm))),
+            beatsPerBar: beatsPerBar === 2 || beatsPerBar === 3 || beatsPerBar === 4 ? beatsPerBar : 4,
+            enabled: true,
+        };
+        MetronomeSettingsStore.save({ enabled: true });
+        const subdivisionFactor = this.settings.subdivision / 4;
+        const interval = 60 / this.settings.bpm / subdivisionFactor;
+        const safeElapsed = Number.isFinite(elapsedSec) ? elapsedSec : 0;
+        let nextBeatNumber = Math.max(0, Math.ceil(safeElapsed / interval - 0.001));
+        let delay = nextBeatNumber * interval - safeElapsed;
+        if (delay < 0.025) {
+            nextBeatNumber += 1;
+            delay += interval;
+        }
+        this.beatInBar = nextBeatNumber % (this.settings.beatsPerBar * subdivisionFactor);
+        this.nextBeatAt = audioNow + delay;
+        this.running = true;
         return true;
     }
 

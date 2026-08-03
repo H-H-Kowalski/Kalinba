@@ -15,16 +15,20 @@ export interface LevelDefinition {
     beatsPerBar: 2 | 3 | 4;
     /** 挑战舞台的落键主题；只影响挑战 HUD，不改变首页主视觉。 */
     visualTheme: 'amber' | 'leaf' | 'sky' | 'coral' | 'plum' | 'mint' | 'dawn' | 'violet' | 'festival';
+    /** 可直接维护的半拍简谱字符串；运行时由 LevelCatalog 解析为 notes。 */
+    notation: string;
     notes: LevelNote[];
     passScore: number;
     twoStarScore: number;
     threeStarScore: number;
 }
 
-export type JudgeGrade = 'perfect' | 'good' | 'miss' | 'wrong';
+export type JudgeGrade = 'perfect' | 'good' | 'bad' | 'miss';
 
 export interface JudgeEvent {
     grade: JudgeGrade;
+    /** 被本次事件消费的谱面索引；误触产生的 bad 不消费目标音，因此没有该值。 */
+    noteIndex?: number;
     keyIndex: number;
     expectedKeyIndex?: number;
     offsetMs?: number;
@@ -39,6 +43,7 @@ export interface LevelResult {
     maxCombo: number;
     perfectCount: number;
     goodCount: number;
+    badCount: number;
     missCount: number;
     wrongCount: number;
     playedNoteCount: number;

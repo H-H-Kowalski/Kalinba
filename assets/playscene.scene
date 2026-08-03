@@ -131,7 +131,7 @@
   },
   {
     "__type__": "cc.Node",
-    "_name": "playerBG2",
+    "_name": "playerBG_legacy",
     "_objFlags": 0,
     "__editorExtras__": {},
     "_parent": {
@@ -220,7 +220,7 @@
       "a": 255
     },
     "_spriteFrame": {
-      "__uuid__": "4fafe69b-ab98-4505-84b1-2568d1bc65c5@f9941",
+      "__uuid__": "f456b84b-c3a7-4528-b1c7-2e2c83bc4741@f9941",
       "__expectedType__": "cc.SpriteFrame"
     },
     "_type": 0,

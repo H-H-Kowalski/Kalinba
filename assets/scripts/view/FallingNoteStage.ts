@@ -1,9 +1,8 @@
-import { _decorator, BlockInputEvents, Button, Color, Component, Graphics, Label, Node, sys, UITransform, Widget } from 'cc';
+import { _decorator, BlockInputEvents, Button, Color, Component, Graphics, Label, Node, sys, tween, Tween, UITransform, Vec3, Widget } from 'cc';
 import { KalimbaKey } from '../KalimbaKey';
 import type { JudgeEvent, LevelDefinition, LevelNote } from '../gameplay/LevelTypes';
 const { ccclass } = _decorator;
 
-type NoteVisual = { note: LevelNote; node: Node; resolved: boolean };
 type ThemeColors = {
     panel: Color;
     border: Color;
@@ -19,12 +18,13 @@ type StageActions = {
     onExit: () => void;
     onTogglePause: () => void;
     onHelp: () => void;
+    onToggleRhythm: () => void;
 };
 
 const TUTORIAL_KEY = 'kalinba_challenge_tutorial_seen_v1';
 
 /**
- * 挑战专用落键舞台。时间轴由 AudioContext 驱动，画面只负责展示，
+ * 挑战专用落键舞台。时间轴由 ChallengeSession 的单调时钟驱动，画面只负责展示，
  * 因此暂停、低帧率和界面动画都不会改变判定结果。
  */
 @ccclass('FallingNoteStage')
@@ -34,16 +34,22 @@ export class FallingNoteStage extends Component {
     private comboLabel: Label | null = null;
     private feedbackLabel: Label | null = null;
     private progressGraphics: Graphics | null = null;
+    private laneGraphics: Graphics | null = null;
+    private feedbackEffectGraphics: Graphics | null = null;
     private noteLayer: Node | null = null;
+    private consumedNoteIndices = new Set<number>();
+    private consumeEffects: Array<{ x: number; grade: JudgeEvent['grade']; startedAtMs: number; consumed: boolean }> = [];
     private modal: Node | null = null;
     private pauseLabel: Label | null = null;
+    private rhythmLabel: Label | null = null;
     private level: LevelDefinition | null = null;
     private startedAtSec = 0;
     private audioNow: (() => number | null) | null = null;
-    private visuals: NoteVisual[] = [];
     private running = false;
     private paused = false;
     private score = 0;
+    private debugLastTimelineBucket = Number.MIN_SAFE_INTEGER;
+    private debugDidDrawNote = false;
     private stageWidth = 1160;
     private stageHeight = 420;
     private laneWidth = 1080;
@@ -52,7 +58,7 @@ export class FallingNoteStage extends Component {
     private actions: StageActions | null = null;
     private theme: ThemeColors = FallingNoteStage.themeFor('amber');
 
-    setAudioClock(getNow: () => number | null) {
+    setTimelineClock(getNow: () => number | null) {
         this.audioNow = getNow;
     }
 
@@ -65,6 +71,16 @@ export class FallingNoteStage extends Component {
         this.running = false;
         this.paused = false;
         this.score = 0;
+        this.consumedNoteIndices.clear();
+        this.consumeEffects = [];
+        this.debugLastTimelineBucket = Number.MIN_SAFE_INTEGER;
+        this.debugDidDrawNote = false;
+        console.log('[ChallengeDebug] stage.prepare ' + JSON.stringify({
+            levelId: level.id,
+            bpm: level.bpm,
+            noteCount: level.notes.length,
+            firstNotes: level.notes.slice(0, 4),
+        }));
         if (this.root) {
             this.root.active = true;
             this.root.setSiblingIndex(this.node.children.length - 1);
@@ -73,6 +89,7 @@ export class FallingNoteStage extends Component {
         if (this.comboLabel) this.comboLabel.string = 'COMBO 0';
         if (this.feedbackLabel) this.feedbackLabel.string = `${level.title} · ${level.bpm} BPM`;
         if (this.pauseLabel) this.pauseLabel.string = '暂停';
+        this.setRhythmEnabled(false);
         this.redrawStage();
         this.drawProgress(0);
         this.showIntro();
@@ -85,18 +102,37 @@ export class FallingNoteStage extends Component {
         this.theme = FallingNoteStage.themeFor(level.visualTheme);
         this.startedAtSec = startedAtSec;
         this.score = 0;
+        this.consumedNoteIndices.clear();
+        this.consumeEffects = [];
         this.running = true;
         this.paused = false;
         this.modal?.destroy();
         this.modal = null;
-        if (this.root) this.root.active = true;
+        if (this.root) {
+            this.root.active = true;
+            this.root.setSiblingIndex(this.node.children.length - 1);
+        }
         if (this.scoreLabel) this.scoreLabel.string = '0 分';
         if (this.comboLabel) this.comboLabel.string = 'COMBO 0';
         if (this.feedbackLabel) this.feedbackLabel.string = '准备 3';
         if (this.pauseLabel) this.pauseLabel.string = '暂停';
         this.redrawStage();
         this.drawProgress(0);
-        for (const note of level.notes) this.createNote(note);
+        // 不等下一帧才布置音符，避免部分小游戏设备首帧较慢时整段预备拍都是空画面。
+        const now = this.audioNow?.();
+        console.log('[ChallengeDebug] stage.start ' + JSON.stringify({
+            levelId: level.id,
+            noteCount: level.notes.length,
+            startedAtSec,
+            now,
+            startedFinite: Number.isFinite(startedAtSec),
+            nowFinite: Number.isFinite(now),
+            hasLaneGraphics: !!this.laneGraphics,
+            hasNoteLayer: !!this.noteLayer,
+            rootActive: !!this.root?.active,
+            keyCenters: Array.from({ length: 17 }, (_, index) => Math.round(this.keyToX(index))),
+        }));
+        if (now !== null && now !== undefined) this.renderTimeline(now);
     }
 
     syncStartedAt(startedAtSec: number) {
@@ -111,6 +147,10 @@ export class FallingNoteStage extends Component {
             this.modal?.destroy();
             this.modal = null;
         }
+    }
+
+    setRhythmEnabled(enabled: boolean, paused = false) {
+        if (this.rhythmLabel) this.rhythmLabel.string = paused ? '节奏 暂停' : enabled ? '节奏 开' : '节奏 关';
     }
 
     showHelp(onClose: () => void) {
@@ -147,19 +187,60 @@ export class FallingNoteStage extends Component {
         this.score = totalScore;
         const text = event.grade === 'perfect' ? 'PERFECT'
             : event.grade === 'good' ? 'GOOD'
-                : event.grade === 'miss' ? 'MISS' : '按错了';
+                : event.grade === 'bad' ? 'BAD' : 'MISS';
         if (this.feedbackLabel) this.feedbackLabel.string = event.scoreDelta > 0 ? `${text}  +${event.scoreDelta}` : text;
         if (this.comboLabel) this.comboLabel.string = `COMBO ${event.combo}`;
         if (this.scoreLabel) this.scoreLabel.string = `${totalScore} 分`;
-        if (event.grade === 'perfect' || event.grade === 'good') this.resolveClosest(event.expectedKeyIndex ?? event.keyIndex);
+        if (event.noteIndex !== undefined) this.consumedNoteIndices.add(event.noteIndex);
+        this.playJudgeFeedback(event);
+    }
+
+    private playJudgeFeedback(event: JudgeEvent) {
+        const color = event.grade === 'perfect' ? new Color(255, 185, 47, 255)
+            : event.grade === 'good' ? new Color(86, 174, 94, 255)
+                : event.grade === 'bad' ? new Color(224, 104, 49, 255)
+                    : new Color(196, 66, 47, 255);
+        const labelNode = this.feedbackLabel?.node;
+        if (this.feedbackLabel) this.feedbackLabel.color = color;
+        if (labelNode?.isValid) {
+            Tween.stopAllByTarget(labelNode);
+            labelNode.setScale(Vec3.ONE);
+            const peak = event.grade === 'perfect' ? 1.32 : event.grade === 'good' ? 1.18 : 1.12;
+            tween(labelNode)
+                .to(0.055, { scale: new Vec3(peak, peak, 1) })
+                .to(0.14, { scale: Vec3.ONE })
+                .start();
+        }
+
+        const keyIndex = event.expectedKeyIndex ?? event.keyIndex;
+        if (keyIndex >= 0 && keyIndex <= 16) {
+            this.consumeEffects.push({
+                x: this.keyToX(keyIndex),
+                grade: event.grade,
+                startedAtMs: FallingNoteStage.monotonicNowMs(),
+                consumed: event.noteIndex !== undefined,
+            });
+        }
+        this.renderConsumeEffects();
     }
 
     update() {
         if (!this.running || this.paused || !this.level || !this.noteLayer) return;
         const now = this.audioNow?.();
         if (now === null || now === undefined) return;
+        this.renderTimeline(now);
+    }
+
+    private renderTimeline(now: number) {
+        if (!this.running || !this.level || !this.noteLayer) return;
+        // 场景里的 Toast、录制控件可能在运行中动态创建，每帧确保挑战舞台和音符层位于最前。
+        this.root?.setSiblingIndex(this.node.children.length - 1);
+        this.noteLayer.setSiblingIndex(Math.max(0, (this.root?.children.length ?? 1) - 1));
         const elapsed = now - this.startedAtSec;
-        const previewSec = 3.15;
+        // 轨道高度有限：过长预览会把相邻音符挤在一起。
+        // 前章仍保留更多反应时间，但控制在不会明显重叠的范围。
+        const previewSec = this.level.chapter === 1 ? 3.0
+            : this.level.chapter === 2 ? 2.8 : 2.6;
         const beatSec = 60 / this.level.bpm;
 
         if (elapsed < 0) {
@@ -171,16 +252,119 @@ export class FallingNoteStage extends Component {
         const duration = Math.max(beatSec, lastBeat * beatSec + beatSec);
         this.drawProgress(Math.max(0, Math.min(1, elapsed / duration)));
 
-        for (const visual of this.visuals) {
-            if (visual.resolved || !visual.node.isValid) continue;
-            const targetAt = visual.note.beat * beatSec;
+        // 复用已经稳定显示的轨道 Graphics 绘制音符：轨道能显示时，
+        // 音符必然走同一渲染组件与坐标空间。子节点只承担数字文字。
+        const graphics = this.laneGraphics;
+        if (graphics) this.drawLanes(graphics);
+        // 窄横杠比带数字的大音符更容易对准判定线，也不会遮住紧邻节拍。
+        const noteWidth = Math.max(38, Math.min(48, this.laneWidth / 17 - 10));
+        const noteHeight = 12;
+        let visibleCount = 0;
+        let nextNote: LevelNote | null = null;
+
+        // 直接读取原始谱面计算位置，Miss/得分回调不再维护另一份显示队列。
+        for (let noteIndex = 0; noteIndex < this.level.notes.length; noteIndex++) {
+            if (this.consumedNoteIndices.has(noteIndex)) continue;
+            const note = this.level.notes[noteIndex];
+            const targetAt = note.beat * beatSec;
             const delta = targetAt - elapsed;
+            if (!nextNote && delta >= -0.34) nextNote = note;
             const visible = delta >= -0.34 && delta <= previewSec;
-            visual.node.active = visible;
             if (visible) {
+                visibleCount += 1;
                 const ratio = delta / previewSec;
-                visual.node.setPosition(this.keyToX(visual.note.keyIndex), this.hitY + ratio * (this.laneTopY - this.hitY), 0);
+                const x = this.keyToX(note.keyIndex);
+                const y = this.hitY + ratio * (this.laneTopY - this.hitY);
+                const passedRatio = delta < 0 ? Math.max(0, Math.min(1, (delta + 0.34) / 0.34)) : 1;
+                if (graphics) this.drawBatchNote(graphics, x, y, noteWidth, noteHeight, passedRatio);
             }
+        }
+        // 长休止或个别平台首帧时钟抖动时，也预先停放下一音在轨道顶部，
+        // 避免玩家面对完全空白的谱面，只等到 MISS 才知道下一键。
+        if (visibleCount === 0 && nextNote) {
+            const x = this.keyToX(nextNote.keyIndex);
+            if (graphics) this.drawBatchNote(graphics, x, this.laneTopY, noteWidth, noteHeight);
+        }
+        this.renderConsumeEffects();
+        const bucket = Number.isFinite(elapsed) ? Math.floor(elapsed * 2) : Number.MAX_SAFE_INTEGER;
+        if (bucket !== this.debugLastTimelineBucket) {
+            this.debugLastTimelineBucket = bucket;
+            console.log('[ChallengeDebug] stage.timeline ' + JSON.stringify({
+                now,
+                startedAtSec: this.startedAtSec,
+                elapsed,
+                nowFinite: Number.isFinite(now),
+                startedFinite: Number.isFinite(this.startedAtSec),
+                elapsedFinite: Number.isFinite(elapsed),
+                noteCount: this.level.notes.length,
+                visibleCount,
+                nextNote,
+                graphicsValid: !!graphics?.isValid,
+            }));
+        }
+    }
+
+    private drawBatchNote(graphics: Graphics, x: number, y: number, width: number, height: number, life = 1) {
+        if (!this.debugDidDrawNote) {
+            this.debugDidDrawNote = true;
+            console.log('[ChallengeDebug] stage.drawFirstNote ' + JSON.stringify({
+                x, y, width, height,
+                color: { r: this.theme.note.r, g: this.theme.note.g, b: this.theme.note.b, a: this.theme.note.a },
+                graphicsValid: !!graphics.isValid,
+            }));
+        }
+        const alpha = Math.round(255 * (0.18 + life * 0.82));
+        const visibleWidth = width * (0.62 + life * 0.38);
+        graphics.fillColor = new Color(this.theme.hit.r, this.theme.hit.g, this.theme.hit.b, Math.round(92 * life));
+        graphics.roundRect(x - visibleWidth / 2 - 5, y - height / 2 - 4, visibleWidth + 10, height + 8, 10);
+        graphics.fill();
+
+        graphics.fillColor = new Color(this.theme.note.r, this.theme.note.g, this.theme.note.b, alpha);
+        graphics.roundRect(x - visibleWidth / 2, y - height / 2, visibleWidth, height, height / 2);
+        graphics.fill();
+        graphics.strokeColor = new Color(this.theme.noteBorder.r, this.theme.noteBorder.g, this.theme.noteBorder.b, alpha);
+        graphics.lineWidth = 2;
+        graphics.roundRect(x - visibleWidth / 2, y - height / 2, visibleWidth, height, height / 2);
+        graphics.stroke();
+        graphics.strokeColor = new Color(255, 249, 225, Math.round(190 * life));
+        graphics.lineWidth = 2;
+        graphics.moveTo(x - visibleWidth / 2 + 7, y + 1);
+        graphics.lineTo(x + visibleWidth / 2 - 7, y + 1);
+        graphics.stroke();
+    }
+
+    private renderConsumeEffects() {
+        const graphics = this.feedbackEffectGraphics;
+        if (!graphics) return;
+        graphics.clear();
+        const now = FallingNoteStage.monotonicNowMs();
+        this.consumeEffects = this.consumeEffects.filter((effect) => now - effect.startedAtMs < 360);
+        for (const effect of this.consumeEffects) {
+            const progress = Math.max(0, Math.min(1, (now - effect.startedAtMs) / 360));
+            const remain = 1 - progress;
+            const base = effect.grade === 'perfect' ? new Color(255, 185, 47, 255)
+                : effect.grade === 'good' ? new Color(86, 174, 94, 255)
+                    : effect.grade === 'bad' ? new Color(224, 104, 49, 255)
+                        : new Color(196, 66, 47, 255);
+            graphics.strokeColor = new Color(base.r, base.g, base.b, Math.round(230 * remain));
+            graphics.lineWidth = effect.grade === 'perfect' ? 5 : 3;
+            graphics.circle(effect.x, this.hitY, 16 + progress * 28);
+            graphics.stroke();
+            if (!effect.consumed) continue;
+            const direction = effect.grade === 'miss' ? -1 : 1;
+            const centerY = this.hitY + direction * progress * 28;
+            graphics.fillColor = new Color(base.r, base.g, base.b, Math.round(210 * remain));
+            graphics.roundRect(effect.x - 24 * remain, centerY - 5 * remain, 48 * remain, 10 * remain, 5);
+            graphics.fill();
+            graphics.strokeColor = new Color(base.r, base.g, base.b, Math.round(190 * remain));
+            graphics.lineWidth = 3;
+            for (let i = 0; i < 4; i++) {
+                const side = i % 2 === 0 ? -1 : 1;
+                const vertical = i < 2 ? -1 : 1;
+                graphics.moveTo(effect.x + side * 8, this.hitY + vertical * 2);
+                graphics.lineTo(effect.x + side * (12 + progress * 25), this.hitY + vertical * (5 + progress * 18));
+            }
+            graphics.stroke();
         }
     }
 
@@ -190,10 +374,11 @@ export class FallingNoteStage extends Component {
         const canvasW = parentUi?.width ?? 1280;
         const canvasH = parentUi?.height ?? 720;
         this.stageWidth = Math.min(1180, canvasW - 30);
-        this.stageHeight = Math.min(430, canvasH * 0.62);
+        // 上半区只承担落键提示，给下半区实体琴键保留完整触控高度。
+        this.stageHeight = Math.min(350, canvasH * 0.50);
         this.laneWidth = this.stageWidth - 72;
-        this.laneTopY = this.stageHeight / 2 - 116;
-        this.hitY = -this.stageHeight / 2 + 55;
+        this.laneTopY = this.stageHeight / 2 - 105;
+        this.hitY = -this.stageHeight / 2 + 48;
 
         const root = new Node('FallingNoteStage');
         root.setParent(this.node);
@@ -222,6 +407,7 @@ export class FallingNoteStage extends Component {
         this.makeControlButton(root, 'ExitButton', '退出', this.stageWidth / 2 - 48, headerY, 74, () => this.actions?.onExit());
         this.makeControlButton(root, 'HelpButton', '教程', this.stageWidth / 2 - 132, headerY, 74, () => this.actions?.onHelp());
         this.pauseLabel = this.makeControlButton(root, 'PauseButton', '暂停', this.stageWidth / 2 - 216, headerY, 74, () => this.actions?.onTogglePause());
+        this.rhythmLabel = this.makeControlButton(root, 'RhythmButton', '节奏 关', this.stageWidth / 2 - 312, headerY, 106, () => this.actions?.onToggleRhythm());
 
         const progress = new Node('Progress');
         progress.setParent(root);
@@ -232,19 +418,16 @@ export class FallingNoteStage extends Component {
         const lanes = new Node('LaneLines');
         lanes.setParent(root);
         lanes.addComponent(UITransform).setContentSize(this.laneWidth, this.laneTopY - this.hitY + 16);
-        lanes.addComponent(Graphics);
-
-        // 判定线下方固定显示与实体琴键一致的音名，让 17 条轨道不是抽象空格。
-        const laneLabelY = this.hitY + 18;
-        for (let i = 0; i < 17; i++) {
-            const label = this.makeText(root, `LaneLabel_${i}`, this.keyToX(i), laneLabelY, 13, new Color(255, 249, 225, 235), Math.max(30, this.laneWidth / 17 - 4));
-            label.string = KalimbaKey.getChallengeDisplayNote(i);
-        }
+        this.laneGraphics = lanes.addComponent(Graphics);
 
         const noteLayer = new Node('Notes');
         noteLayer.setParent(root);
         noteLayer.addComponent(UITransform).setContentSize(this.laneWidth, this.laneTopY - this.hitY + 20);
         this.noteLayer = noteLayer;
+        const effects = new Node('JudgeEffects');
+        effects.setParent(root);
+        effects.addComponent(UITransform).setContentSize(this.laneWidth, this.stageHeight);
+        this.feedbackEffectGraphics = effects.addComponent(Graphics);
         this.root = root;
         this.redrawStage();
     }
@@ -261,9 +444,11 @@ export class FallingNoteStage extends Component {
             this.showTutorialModal(true, () => this.actions?.onStart());
             return;
         }
+        const lastBeat = this.level.notes[this.level.notes.length - 1]?.beat ?? 0;
+        const durationSec = Math.ceil(lastBeat * 60 / this.level.bpm);
         this.showMessageModal(
-            this.level.title,
-            `${this.level.subtitle}\n${this.level.bpm} BPM · ${this.level.notes.length} 个音符\n\n音符落到判定线时，点击相同数字的琴键`,
+            `《${this.level.title}》`,
+            `${this.level.subtitle}\n${this.level.bpm} BPM · 约 ${durationSec} 秒 · ${this.level.notes.length} 个音符\n\n横杠落到判定线时，点击对应轨道的琴键`,
             '开始挑战',
             () => this.actions?.onStart(),
             true,
@@ -280,7 +465,7 @@ export class FallingNoteStage extends Component {
 
         this.makeText(modal, 'TutorialTitle', 0, this.stageHeight / 2 - 82, 29, this.theme.text, 650).string =
             startMode ? '第一次挑战，先看这里' : '挑战教程';
-        this.makeText(modal, 'Step1', -205, 58, 19, this.theme.text, 210).string = '① 看数字音符向下落';
+        this.makeText(modal, 'Step1', -205, 58, 19, this.theme.text, 210).string = '① 看节奏横杠向下落';
         this.makeText(modal, 'Step2', 0, 58, 19, this.theme.text, 210).string = '② 到达亮色判定线';
         this.makeText(modal, 'Step3', 205, 58, 19, this.theme.text, 210).string = '③ 点击相同数字琴键';
 
@@ -294,15 +479,14 @@ export class FallingNoteStage extends Component {
             demoGraphics.lineTo(250, -22);
             demoGraphics.stroke();
         }
-        const sample = this.makeShape(demoLane, 'SampleNote', 50, 50, this.theme.note, 14, this.theme.noteBorder, 2);
+        const sample = this.makeShape(demoLane, 'SampleNote', 72, 12, this.theme.note, 6, this.theme.noteBorder, 2);
         sample.setPosition(-120, 12, 0);
-        this.makeText(sample, 'SampleNumber', 0, 0, 24, new Color(255, 249, 225, 255), 46).string = '1';
         this.makeText(demoLane, 'Arrow', -50, 10, 28, this.theme.hit, 60).string = '↓';
         this.makeText(demoLane, 'HitHint', 105, -22, 17, this.theme.text, 250).string = '到这里时弹奏';
 
-        this.makeText(modal, 'Hint', 0, -88, 16, new Color(126, 96, 59, 255), 650).string =
-            '数字前的圆点代表高音；看准位置，PERFECT 得分最高';
-        this.makeActionButton(modal, startMode ? '我懂了，开始' : '继续挑战', 230, 54, 0, -132, () => {
+        this.makeText(modal, 'Hint', 0, -70, 16, new Color(126, 96, 59, 255), 650).string =
+            '越贴近判定线越准：PERFECT / GOOD / BAD / MISS；右上可开启节奏提示';
+        this.makeActionButton(modal, startMode ? '我懂了，开始' : '继续挑战', 230, 54, 0, -115, () => {
             if (startMode) {
                 try {
                     sys.localStorage.setItem(TUTORIAL_KEY, '1');
@@ -342,62 +526,19 @@ export class FallingNoteStage extends Component {
         });
     }
 
-    private createNote(note: LevelNote) {
-        if (!this.noteLayer) return;
-        const noteWidth = Math.max(34, Math.min(52, this.laneWidth / 17 - 8));
-        const noteHeight = 46;
-        const node = new Node('FallingNote');
-        node.setParent(this.noteLayer);
-        node.addComponent(UITransform).setContentSize(noteWidth, noteHeight);
-
-        const shadow = new Node('Shadow');
-        shadow.setParent(node);
-        shadow.addComponent(UITransform).setContentSize(noteWidth, noteHeight);
-        shadow.setPosition(0, -4, 0);
-        const shadowG = shadow.addComponent(Graphics);
-        shadowG.fillColor = new Color(this.theme.noteBorder.r, this.theme.noteBorder.g, this.theme.noteBorder.b, 85);
-        shadowG.roundRect(-noteWidth / 2, -noteHeight / 2, noteWidth, noteHeight, 13);
-        shadowG.fill();
-
-        const shape = new Node('Shape');
-        shape.setParent(node);
-        shape.addComponent(UITransform).setContentSize(noteWidth, noteHeight);
-        const graphics = shape.addComponent(Graphics);
-        graphics.fillColor = this.theme.note;
-        graphics.roundRect(-noteWidth / 2, -noteHeight / 2, noteWidth, noteHeight, 13);
-        graphics.fill();
-        graphics.strokeColor = this.theme.noteBorder;
-        graphics.lineWidth = 2.5;
-        graphics.roundRect(-noteWidth / 2, -noteHeight / 2, noteWidth, noteHeight, 13);
-        graphics.stroke();
-
-        const label = this.makeText(node, 'Number', 0, 0, 22, new Color(255, 249, 225, 255), noteWidth - 4);
-        label.string = KalimbaKey.getChallengeDisplayNote(note.keyIndex);
-        node.active = false;
-        this.visuals.push({ note, node, resolved: false });
-    }
-
-    private resolveClosest(keyIndex: number) {
-        const now = this.audioNow?.();
-        if (now === null || now === undefined || !this.level) return;
-        const elapsed = now - this.startedAtSec;
-        const beatSec = 60 / this.level.bpm;
-        const candidates = this.visuals.filter((visual) => !visual.resolved && visual.note.keyIndex === keyIndex);
-        candidates.sort((a, b) => Math.abs(a.note.beat * beatSec - elapsed) - Math.abs(b.note.beat * beatSec - elapsed));
-        const visual = candidates[0];
-        if (!visual) return;
-        visual.resolved = true;
-        visual.node.active = false;
-    }
-
     private keyToX(keyIndex: number): number {
         const safe = Math.max(0, Math.min(16, keyIndex));
+        const key = KalimbaKey.getByIndex(safe);
+        const rootTransform = this.root?.getComponent(UITransform);
+        if (key?.node?.isValid && rootTransform) {
+            return rootTransform.convertToNodeSpaceAR(key.node.worldPosition).x;
+        }
         return -this.laneWidth / 2 + (this.laneWidth / 17) * (safe + 0.5);
     }
 
     private clearNotes() {
-        for (const visual of this.visuals) visual.node.destroy();
-        this.visuals = [];
+        if (this.laneGraphics) this.drawLanes(this.laneGraphics);
+        this.feedbackEffectGraphics?.clear();
     }
 
     private redrawStage() {
@@ -414,34 +555,10 @@ export class FallingNoteStage extends Component {
             panelGraphics.stroke();
         }
 
-        const laneGraphics = this.root.getChildByName('LaneLines')?.getComponent(Graphics);
-        if (laneGraphics) {
-            laneGraphics.clear();
-            const laneW = this.laneWidth / 17;
-            for (let i = 0; i < 17; i++) {
-                if (i % 2 === 0) {
-                    laneGraphics.fillColor = this.theme.laneAlt;
-                    laneGraphics.rect(-this.laneWidth / 2 + i * laneW, this.hitY, laneW, this.laneTopY - this.hitY);
-                    laneGraphics.fill();
-                }
-            }
-            laneGraphics.strokeColor = this.theme.lane;
-            laneGraphics.lineWidth = 1;
-            for (let i = 0; i <= 17; i++) {
-                const x = -this.laneWidth / 2 + laneW * i;
-                laneGraphics.moveTo(x, this.hitY);
-                laneGraphics.lineTo(x, this.laneTopY);
-            }
-            laneGraphics.stroke();
-            laneGraphics.strokeColor = this.theme.hit;
-            laneGraphics.lineWidth = 5;
-            laneGraphics.moveTo(-this.laneWidth / 2, this.hitY);
-            laneGraphics.lineTo(this.laneWidth / 2, this.hitY);
-            laneGraphics.stroke();
-        }
+        if (this.laneGraphics) this.drawLanes(this.laneGraphics);
 
         const title = this.root.getChildByName('Title')?.getComponent(Label);
-        if (title && this.level) title.string = `${this.level.title}  ·  ${this.level.bpm} BPM`;
+        if (title && this.level) title.string = `《${this.level.title}》  ·  ${this.level.bpm} BPM`;
         if (this.scoreLabel) this.scoreLabel.color = this.theme.text;
         if (this.comboLabel) this.comboLabel.color = this.theme.hit;
         if (this.feedbackLabel) this.feedbackLabel.color = this.theme.text;
@@ -461,6 +578,35 @@ export class FallingNoteStage extends Component {
             graphics.roundRect(-width / 2, -5, fillW, 10, 5);
             graphics.fill();
         }
+    }
+
+    private drawLanes(graphics: Graphics) {
+        graphics.clear();
+        const laneW = this.laneWidth / 17;
+        // 半透明命中带把判定区域从一根抽象细线变成明确目标，但保持足够窄。
+        graphics.fillColor = new Color(this.theme.hit.r, this.theme.hit.g, this.theme.hit.b, 34);
+        graphics.roundRect(-this.laneWidth / 2, this.hitY - 10, this.laneWidth, 20, 10);
+        graphics.fill();
+        for (let i = 0; i < 17; i++) {
+            if (i % 2 === 0) {
+                graphics.fillColor = this.theme.laneAlt;
+                graphics.rect(-this.laneWidth / 2 + i * laneW, this.hitY, laneW, this.laneTopY - this.hitY);
+                graphics.fill();
+            }
+        }
+        graphics.strokeColor = this.theme.lane;
+        graphics.lineWidth = 1;
+        for (let i = 0; i <= 17; i++) {
+            const x = -this.laneWidth / 2 + laneW * i;
+            graphics.moveTo(x, this.hitY);
+            graphics.lineTo(x, this.laneTopY);
+        }
+        graphics.stroke();
+        graphics.strokeColor = this.theme.hit;
+        graphics.lineWidth = 5;
+        graphics.moveTo(-this.laneWidth / 2, this.hitY);
+        graphics.lineTo(this.laneWidth / 2, this.hitY);
+        graphics.stroke();
     }
 
     private makeControlButton(parent: Node, name: string, text: string, x: number, y: number, width: number, onClick: () => void): Label {
@@ -542,5 +688,11 @@ export class FallingNoteStage extends Component {
         this.clearNotes();
         this.root?.destroy();
         this.root = null;
+    }
+
+    private static monotonicNowMs(): number {
+        const perf = (globalThis as unknown as { performance?: { now?: () => number } }).performance;
+        const value = perf?.now?.();
+        return Number.isFinite(value) ? value! : Date.now();
     }
 }

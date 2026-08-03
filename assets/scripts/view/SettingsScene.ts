@@ -1,6 +1,8 @@
 import {
     _decorator,
+    BlockInputEvents,
     Button,
+    Color,
     Component,
     director,
     EditBox,
@@ -9,6 +11,7 @@ import {
     Layout,
     Node,
     Prefab,
+    Graphics,
     Sprite,
     UITransform,
     Widget,
@@ -22,6 +25,7 @@ import { FONTS_CATALOG } from '../manager/FontsCatalog';
 import { applySavedFontToSubtree, invalidateFontCache } from '../manager/GlobalFontApplier';
 import { SettingLabel } from './SettingLabel';
 import { showToast } from './SimpleToast';
+import { MetronomeSettingsStore } from '../manager/MetronomeSettingsStore';
 const { ccclass, property } = _decorator;
 
 /**
@@ -85,6 +89,7 @@ export class SettingsScene extends Component {
     private pageTurnNames = ['横向翻页', '纵向翻页'];
     private pageTurnItems: SettingLabel[] = [];
     private pageTurnItemNodes: Node[] = [];
+    private unifiedSettingsRoot: Node | null = null;
     @property({ type: EditBox, tooltip: '滚动速度输入框（1~100），在场景中创建 EditBox 并绑定到此属性' })
     autoScrollSpeedEditBox: EditBox | null = null;
 
@@ -101,21 +106,146 @@ export class SettingsScene extends Component {
     }
 
     start() {
-        this.applyStoreToUI();
-
-        if (this.backButton) {
-            this.backButton.node.on(Button.EventType.CLICK, this.onBackClick, this);
-        }
-        if (this.resetDefaultsButton) {
-            this.resetDefaultsButton.node.on(Button.EventType.CLICK, this.onResetDefaultsClick, this);
-        }
-        this.buildStyleList();
-        this.ensureFontListRoot();
-        this.buildFontList();
-        this.ensurePageTurnRoot();
-        this.buildPageTurnList();
-        this.initAutoScrollSpeedEditBox();
+        this.buildUnifiedSettingsUI();
         void applySavedFontToSubtree(this.node);
+    }
+
+    private buildUnifiedSettingsUI() {
+        // 隐藏旧版散落控件，仅保留相机与背景；不修改场景序列化结构，方便回退。
+        for (const child of [...this.node.children]) {
+            if (child.name === 'Camera' || child.name === 'settingBg') continue;
+            child.active = false;
+        }
+        const root = new Node('UnifiedSettingsPanel');
+        root.layer = this.node.layer;
+        root.setParent(this.node);
+        root.addComponent(UITransform).setContentSize(1120, 620);
+        root.addComponent(BlockInputEvents);
+        const widget = root.addComponent(Widget);
+        widget.isAlignHorizontalCenter = true;
+        widget.horizontalCenter = 0;
+        widget.isAlignVerticalCenter = true;
+        widget.verticalCenter = 0;
+        widget.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+        this.unifiedSettingsRoot = root;
+        this.rebuildUnifiedSettingsUI();
+    }
+
+    private rebuildUnifiedSettingsUI() {
+        const root = this.unifiedSettingsRoot;
+        if (!root?.isValid) return;
+        for (const child of [...root.children]) child.destroy();
+        const ink = new Color(92, 54, 29, 255);
+        const muted = new Color(137, 104, 70, 255);
+        const paper = new Color(255, 246, 217, 247);
+        const wood = new Color(139, 68, 31, 255);
+        this.makeUnifiedShape(root, 'Panel', 1120, 620, 0, 0, paper, wood, 30, 3);
+        this.makeUnifiedLabel(root, 'Title', '演奏设置', 0, 264, 420, 54, 34, wood);
+        this.makeUnifiedButton(root, 'Back', '返回', -486, 264, 104, 48, wood, new Color(255, 246, 219, 255), () => this.onBackClick());
+        this.makeUnifiedButton(root, 'Reset', '恢复默认', 466, 264, 132, 48, new Color(116, 91, 61, 255), new Color(255, 246, 219, 255), () => this.onResetDefaultsClick());
+
+        const audio = AudioSettingsStore.load();
+        const sheet = SheetSettingsStore.load();
+        const rhythm = MetronomeSettingsStore.load();
+        const makeRow = (name: string, title: string, hint: string, y: number) => {
+            const card = this.makeUnifiedShape(root, name, 1010, 94, 0, y, new Color(255, 252, 235, 245), new Color(214, 160, 87, 190), 20, 1.5);
+            this.makeUnifiedLabel(card, 'Title', title, -405, 12, 170, 34, 22, ink);
+            this.makeUnifiedLabel(card, 'Hint', hint, -405, -20, 190, 26, 13, muted);
+            return card;
+        };
+
+        const soundRow = makeRow('SoundRow', '音色', '选择琴声质感', 168);
+        this.styleNames.forEach((text, index) => {
+            this.makeUnifiedOption(soundRow, text, -210 + index * 135, 0, 118, audio.synthStylePreset === index, () => {
+                AudioSettingsStore.save({ synthStylePreset: index, useManualSynthTuning: false });
+                this.rebuildUnifiedSettingsUI();
+            });
+        });
+
+        const sheetRow = makeRow('SheetRow', '琴谱方向', '长图固定纵向', 62);
+        ['横向翻页', '纵向翻页'].forEach((text, index) => {
+            this.makeUnifiedOption(sheetRow, text, -115 + index * 200, 0, 176, sheet.pageTurnMode === index, () => {
+                if (index === 0 && SheetRuntimeStore.isLongImageActive()) {
+                    showToast(this.node, '长图仅支持纵向滚动');
+                    return;
+                }
+                SheetSettingsStore.save({ pageTurnMode: index });
+                this.rebuildUnifiedSettingsUI();
+            });
+        });
+
+        const rhythmRow = makeRow('RhythmRow', '节奏密度', '提示音不会进入录制', -44);
+        ([4, 8, 16] as const).forEach((value, index) => {
+            this.makeUnifiedOption(rhythmRow, `${value} 分音符`, -150 + index * 190, 0, 166, rhythm.subdivision === value, () => {
+                MetronomeSettingsStore.save({ subdivision: value });
+                this.rebuildUnifiedSettingsUI();
+            });
+        });
+
+        const speedRow = makeRow('SpeedRow', '琴谱速度', '自动滚动速度', -150);
+        const speeds = [30, 50, 75];
+        const selectedSpeed = speeds.reduce((best, value) =>
+            Math.abs(value - sheet.autoScrollSpeed) < Math.abs(best - sheet.autoScrollSpeed) ? value : best,
+        speeds[0]);
+        if (selectedSpeed !== sheet.autoScrollSpeed) SheetSettingsStore.save({ autoScrollSpeed: selectedSpeed });
+        ['慢速', '标准', '快速'].forEach((text, index) => {
+            this.makeUnifiedOption(speedRow, text, -150 + index * 190, 0, 166, selectedSpeed === speeds[index], () => {
+                SheetSettingsStore.save({ autoScrollSpeed: speeds[index] });
+                this.rebuildUnifiedSettingsUI();
+            });
+        });
+        this.makeUnifiedLabel(root, 'Footer', '设置会自动保存，并同时用于自由演奏与挑战模式', 0, -252, 760, 34, 15, muted);
+        void applySavedFontToSubtree(root);
+    }
+
+    private makeUnifiedShape(parent: Node, name: string, width: number, height: number, x: number, y: number, fill: Color, stroke: Color, radius: number, lineWidth: number): Node {
+        const node = new Node(name);
+        node.layer = parent.layer;
+        node.setParent(parent);
+        node.addComponent(UITransform).setContentSize(width, height);
+        node.setPosition(x, y, 0);
+        const graphics = node.addComponent(Graphics);
+        graphics.fillColor = fill;
+        graphics.roundRect(-width / 2, -height / 2, width, height, radius);
+        graphics.fill();
+        graphics.strokeColor = stroke;
+        graphics.lineWidth = lineWidth;
+        graphics.roundRect(-width / 2, -height / 2, width, height, radius);
+        graphics.stroke();
+        return node;
+    }
+
+    private makeUnifiedLabel(parent: Node, name: string, text: string, x: number, y: number, width: number, height: number, size: number, color: Color): Label {
+        const node = new Node(name);
+        node.layer = parent.layer;
+        node.setParent(parent);
+        node.addComponent(UITransform).setContentSize(width, height);
+        node.setPosition(x, y, 0);
+        const label = node.addComponent(Label);
+        label.string = text;
+        label.fontSize = size;
+        label.lineHeight = size + 6;
+        label.color = color;
+        label.horizontalAlign = Label.HorizontalAlign.CENTER;
+        label.verticalAlign = Label.VerticalAlign.CENTER;
+        label.overflow = Label.Overflow.SHRINK;
+        return label;
+    }
+
+    private makeUnifiedButton(parent: Node, name: string, text: string, x: number, y: number, width: number, height: number, fill: Color, textColor: Color, onClick: () => void): Node {
+        const node = this.makeUnifiedShape(parent, name, width, height, x, y, fill, new Color(238, 190, 104, 170), 16, 1.5);
+        this.makeUnifiedLabel(node, 'Label', text, 0, 0, width - 12, height - 4, 18, textColor);
+        const button = node.addComponent(Button);
+        button.transition = Button.Transition.SCALE;
+        button.zoomScale = 0.96;
+        node.on(Button.EventType.CLICK, onClick, this);
+        return node;
+    }
+
+    private makeUnifiedOption(parent: Node, text: string, x: number, y: number, width: number, selected: boolean, onClick: () => void) {
+        const fill = selected ? new Color(174, 87, 35, 255) : new Color(247, 222, 169, 255);
+        const textColor = selected ? new Color(255, 248, 224, 255) : new Color(102, 58, 31, 255);
+        this.makeUnifiedButton(parent, `Option_${text}`, selected ? `✓ ${text}` : text, x, y, width, 52, fill, textColor, onClick);
     }
 
     private applyStoreToUI() {
@@ -658,8 +788,14 @@ export class SettingsScene extends Component {
         });
         FontSettingsStore.save(FontSettingsStore.defaultSnapshot());
         SheetSettingsStore.save(SheetSettingsStore.defaultSnapshot());
+        MetronomeSettingsStore.save(MetronomeSettingsStore.defaultSnapshot());
         invalidateFontCache();
         this.updateSynthLabels(true, d.synthStylePreset);
+        if (this.unifiedSettingsRoot?.isValid) {
+            this.rebuildUnifiedSettingsUI();
+            showToast(this.node, '已恢复默认设置');
+            return;
+        }
         this.buildFontList();
         this.buildPageTurnList();
         if (this.autoScrollSpeedEditBox) {

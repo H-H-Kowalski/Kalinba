@@ -5,8 +5,11 @@ import type { JudgeEvent, LevelDefinition, LevelResult } from './LevelTypes';
  * 判定窗口故意比传统硬核音游宽，目标是鼓励新手练琴，而不是制造失败感。
  */
 export class RhythmJudge {
-    private static readonly PERFECT_WINDOW_MS = 85;
-    private static readonly GOOD_WINDOW_MS = 180;
+    // 面向触屏拇指琴新手：需要在落键提示和实体琴键之间移动视线，
+    // 判定窗口比传统音游更宽，优先保证“跟得上并愿意继续玩”。
+    private static readonly PERFECT_WINDOW_MS = 110;
+    private static readonly GOOD_WINDOW_MS = 220;
+    private static readonly BAD_WINDOW_MS = 340;
 
     private cursor = 0;
     private score = 0;
@@ -14,6 +17,7 @@ export class RhythmJudge {
     private maxCombo = 0;
     private perfectCount = 0;
     private goodCount = 0;
+    private badCount = 0;
     private missCount = 0;
     private wrongCount = 0;
     private playedNoteCount = 0;
@@ -32,8 +36,8 @@ export class RhythmJudge {
         const elapsedMs = Math.max(0, (nowSec - this.startedAtSec) * 1000);
         while (this.cursor < this.level.notes.length) {
             const targetMs = this.beatToMs(this.level.notes[this.cursor].beat);
-            if (elapsedMs <= targetMs + RhythmJudge.GOOD_WINDOW_MS) break;
-            events.push(this.registerMiss(this.level.notes[this.cursor].keyIndex));
+            if (elapsedMs <= targetMs + RhythmJudge.BAD_WINDOW_MS) break;
+            events.push(this.registerMiss(this.level.notes[this.cursor].keyIndex, this.cursor));
             this.cursor += 1;
         }
         return events;
@@ -43,14 +47,15 @@ export class RhythmJudge {
         const events = this.advance(nowSec);
         this.playedNoteCount += 1;
         const target = this.level.notes[this.cursor];
+        const targetIndex = this.cursor;
         if (!target) {
-            events.push(this.registerWrong(keyIndex));
+            events.push(this.registerBad(keyIndex));
             return events;
         }
         const elapsedMs = Math.max(0, (nowSec - this.startedAtSec) * 1000);
         const offsetMs = elapsedMs - this.beatToMs(target.beat);
-        if (keyIndex !== target.keyIndex || Math.abs(offsetMs) > RhythmJudge.GOOD_WINDOW_MS) {
-            events.push(this.registerWrong(keyIndex, target.keyIndex, offsetMs));
+        if (keyIndex !== target.keyIndex || Math.abs(offsetMs) > RhythmJudge.BAD_WINDOW_MS) {
+            events.push(this.registerBad(keyIndex, target.keyIndex, offsetMs));
             return events;
         }
         this.cursor += 1;
@@ -60,14 +65,21 @@ export class RhythmJudge {
             this.perfectCount += 1;
             const scoreDelta = Math.round(100 * this.comboMultiplier());
             this.score += scoreDelta;
-            events.push({ grade: 'perfect', keyIndex, expectedKeyIndex: target.keyIndex, offsetMs, combo: this.combo, scoreDelta });
-        } else {
+            events.push({ grade: 'perfect', noteIndex: targetIndex, keyIndex, expectedKeyIndex: target.keyIndex, offsetMs, combo: this.combo, scoreDelta });
+        } else if (Math.abs(offsetMs) <= RhythmJudge.GOOD_WINDOW_MS) {
             this.combo += 1;
             this.maxCombo = Math.max(this.maxCombo, this.combo);
             this.goodCount += 1;
             const scoreDelta = Math.round(65 * this.comboMultiplier());
             this.score += scoreDelta;
-            events.push({ grade: 'good', keyIndex, expectedKeyIndex: target.keyIndex, offsetMs, combo: this.combo, scoreDelta });
+            events.push({ grade: 'good', noteIndex: targetIndex, keyIndex, expectedKeyIndex: target.keyIndex, offsetMs, combo: this.combo, scoreDelta });
+        } else {
+            this.combo = 0;
+            this.badCount += 1;
+            this.wrongCount += 1;
+            const scoreDelta = 20;
+            this.score += scoreDelta;
+            events.push({ grade: 'bad', noteIndex: targetIndex, keyIndex, expectedKeyIndex: target.keyIndex, offsetMs, combo: 0, scoreDelta });
         }
         return events;
     }
@@ -92,6 +104,7 @@ export class RhythmJudge {
             maxCombo: this.maxCombo,
             perfectCount: this.perfectCount,
             goodCount: this.goodCount,
+            badCount: this.badCount,
             missCount: this.missCount,
             wrongCount: this.wrongCount,
             playedNoteCount: this.playedNoteCount,
@@ -107,15 +120,16 @@ export class RhythmJudge {
         return 1 + Math.min(0.5, this.combo * 0.025);
     }
 
-    private registerMiss(expectedKeyIndex: number): JudgeEvent {
+    private registerMiss(expectedKeyIndex: number, noteIndex: number): JudgeEvent {
         this.combo = 0;
         this.missCount += 1;
-        return { grade: 'miss', keyIndex: -1, expectedKeyIndex, combo: 0, scoreDelta: 0 };
+        return { grade: 'miss', noteIndex, keyIndex: -1, expectedKeyIndex, combo: 0, scoreDelta: 0 };
     }
 
-    private registerWrong(keyIndex: number, expectedKeyIndex?: number, offsetMs?: number): JudgeEvent {
+    private registerBad(keyIndex: number, expectedKeyIndex?: number, offsetMs?: number): JudgeEvent {
         this.combo = 0;
+        this.badCount += 1;
         this.wrongCount += 1;
-        return { grade: 'wrong', keyIndex, expectedKeyIndex, offsetMs, combo: 0, scoreDelta: 0 };
+        return { grade: 'bad', keyIndex, expectedKeyIndex, offsetMs, combo: 0, scoreDelta: 0 };
     }
 }
