@@ -70,6 +70,12 @@ export class PerformanceRecorder {
         if (!Array.isArray(rec.events) || rec.events.length === 0) return 'events is empty';
         if (rec.events.length > PERFORMANCE_MAX_EVENTS) return 'event count exceeds limit';
         if (!Number.isFinite(rec.durationMs) || rec.durationMs < 0 || rec.durationMs > PERFORMANCE_MAX_DURATION_MS) return 'duration out of range';
+        if (!Number.isInteger(rec.stylePreset) || rec.stylePreset < 0 || rec.stylePreset > 4) return 'style preset invalid';
+        if (rec.title !== undefined && typeof rec.title !== 'string') return 'title invalid';
+        for (const event of rec.events) {
+            if (!event || !Number.isFinite(event.t) || event.t < 0 || event.t > rec.durationMs) return 'note time invalid';
+            if (!Number.isInteger(event.k) || event.k < 0 || event.k >= 17) return 'note key invalid';
+        }
         return null;
     }
 

@@ -33,9 +33,12 @@ exports.main = async (event) => {
   const events = Array.isArray(parsed.events) ? parsed.events : [];
 
   return {
+    contentSecurityVersion: 1,
     record: {
-      title: row.title || '',
-      stylePreset: Number(row.stylePreset || 1),
+      // Legacy unchecked titles must never be shown by a recipient.
+      title: row.contentSecurityVersion === 1 && typeof row.title === 'string' && row.title.length <= 40
+        ? row.title.trim() : '《分享演奏》',
+      stylePreset: Number.isInteger(Number(row.stylePreset)) ? Number(row.stylePreset) : 1,
       durationMs: Number(row.durationMs || 0),
       appVersion: row.appVersion || '1.0.0',
       events,

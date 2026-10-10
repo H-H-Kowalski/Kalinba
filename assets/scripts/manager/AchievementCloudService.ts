@@ -1,9 +1,5 @@
-import { getWx } from './WeChatNative';
 import type { LevelResult } from '../gameplay/LevelTypes';
-
-type CallResult<T> = {
-    result?: T;
-};
+import { callWxCloudFunction } from './WeChatCloudFunction';
 
 type DateScorePair = {
     dateKey: string;
@@ -29,21 +25,6 @@ export type UserAchievementStats = {
 type UpsertStatsResult = {
     stats: UserAchievementStats;
 };
-
-function callWxCloudFunction<T>(name: string, data: Record<string, unknown>): Promise<T> {
-    const wxApi = getWx() as {
-        cloud?: {
-            callFunction?: (arg: { name: string; data: Record<string, unknown> }) => Promise<CallResult<T>>;
-        };
-    } | undefined;
-    if (!wxApi?.cloud?.callFunction) {
-        return Promise.reject(new Error('wx.cloud.callFunction is unavailable'));
-    }
-    return wxApi.cloud.callFunction({ name, data }).then((res) => {
-        if (!res?.result) throw new Error('empty cloud result');
-        return res.result;
-    });
-}
 
 export class AchievementCloudService {
     static async reportPlayDuration(durationMs: number): Promise<UserAchievementStats> {

@@ -1,4 +1,4 @@
-import { _decorator, Component, AudioClip, AudioSource, instantiate, Prefab, Vec3, Enum, UITransform } from 'cc';
+import { _decorator, Component, AudioClip, AudioSource, instantiate, Prefab, Vec3, Enum, UITransform, isValid } from 'cc';
 import { ClickIndicator } from '../ClickIndicator';
 import { SynthKalimbaEngine } from './SynthKalimbaEngine';
 import { AudioSettingsStore, DEFAULT_APP_GAIN } from './AudioSettingsStore';
@@ -17,7 +17,7 @@ enum SynthStylePreset {
 @ccclass('AudioManager')
 export class AudioManager extends Component {
     private static instance: AudioManager = null;
-    private static readonly MAX_OUTPUT_GAIN = 3.75;
+    private static readonly MAX_OUTPUT_GAIN = 1.35;
     
     @property([AudioClip])
     keySounds: AudioClip[] = [];
@@ -39,31 +39,31 @@ export class AudioManager extends Component {
 
     // ---- 合成器调音面板（Inspector可调）----
     @property({ tooltip: '起音时长(秒)，越小越脆' })
-    synthAttackSec: number = 0.01;
+    synthAttackSec: number = 0.008;
     @property({ tooltip: '快衰时长(秒)' })
-    synthFastDecaySec: number = 0.5;
+    synthFastDecaySec: number = 0.38;
     @property({ tooltip: '慢衰结束(秒)' })
-    synthSlowDecaySec: number = 2.9;
+    synthSlowDecaySec: number = 2.35;
     @property({ tooltip: '主体峰值音量(0~1)' })
-    synthBasePeakGain: number = 0.88;
+    synthBasePeakGain: number = 0.74;
     @property({ tooltip: '快衰后电平(0~1)' })
-    synthFastDecayLevel: number = 0.14;
+    synthFastDecayLevel: number = 0.12;
     @property({ tooltip: '非整数泛音倍频，如 2.71' })
-    synthOvertoneRatio: number = 2.71;
+    synthOvertoneRatio: number = 2.76;
     @property({ tooltip: '泛音峰值(0~1)' })
-    synthOvertonePeakGain: number = 0.2;
+    synthOvertonePeakGain: number = 0.12;
     @property({ tooltip: '泛音衰减时长(秒)' })
-    synthOvertoneDecaySec: number = 0.42;
+    synthOvertoneDecaySec: number = 0.26;
     @property({ tooltip: '瞬态频率倍数' })
-    synthTransientFreqMul: number = 8.5;
+    synthTransientFreqMul: number = 6.8;
     @property({ tooltip: '瞬态峰值(0~1)' })
-    synthTransientPeakGain: number = 0.11;
+    synthTransientPeakGain: number = 0.045;
     @property({ tooltip: '瞬态衰减时长(秒)' })
-    synthTransientDecaySec: number = 0.05;
+    synthTransientDecaySec: number = 0.022;
     @property({ tooltip: '高通频率(Hz)，越高越薄' })
-    synthHpHz: number = 90;
+    synthHpHz: number = 95;
     @property({ tooltip: '低通频率(Hz)，越低越不刺耳' })
-    synthLpHz: number = 7200;
+    synthLpHz: number = 5800;
     
     private audioSource: AudioSource = null;
     private audioSources: AudioSource[] = [];  // 多个音频源用于合奏
@@ -72,9 +72,12 @@ export class AudioManager extends Component {
     private warnedSynthUnsupported = false;
     private warnedFallbackClip = false;
     private synthEngine: SynthKalimbaEngine | null = null;
+    private disposed = false;
+    private playbackGeneration = 0;
     
     public static getInstance(): AudioManager {
-        return AudioManager.instance;
+        const instance = AudioManager.instance;
+        return isValid(instance, true) && !instance.disposed ? instance : null;
     }
     
     /** 须早于各琴键 start，避免 getInstance() 为空导致整局无声 */
@@ -129,12 +132,15 @@ export class AudioManager extends Component {
      * @param fallbackClip 琴键节点上的采样，AudioManager.keySounds 未配时兜底
      */
     playKeySound(keyIndex: number, worldPos?: Vec3, fallbackClip?: AudioClip): void {
+        if (this.disposed) return;
+        const generation = this.playbackGeneration;
         this.applySynthParams();
         if (this.clickIndicatorEnabled && worldPos && this.clickIndicatorPrefab) {
             this.createClickIndicator(worldPos);
         }
 
         const tryFallbacks = (reason: string): boolean => {
+            if (this.disposed || generation !== this.playbackGeneration) return false;
             let ok = this.playKeySoundFallbackClip(keyIndex);
             if (!ok && fallbackClip) {
                 const src = this.getAvailableAudioSource();
@@ -164,6 +170,7 @@ export class AudioManager extends Component {
 
         kalimbaAudioLog('AudioMgr', 'playKeySound → synth', { keyIndex, hasFallbackClip: !!fallbackClip });
         this.synthEngine.playKeyInUserGesture(keyIndex, 1, (ok) => {
+            if (this.disposed || generation !== this.playbackGeneration) return;
             if (!ok) {
                 kalimbaAudioLog('AudioMgr', 'synth callback not ok → tryFallbacks', { keyIndex });
                 tryFallbacks('synth_play_failed');
@@ -197,20 +204,22 @@ export class AudioManager extends Component {
      * 获取可用的音频源
      */
     private getAvailableAudioSource(): AudioSource | null {
+        if (this.disposed) return null;
         // 首先检查主音频源
-        if (!this.audioSource.playing) {
-            return this.audioSource;
+        const main = isValid(this.audioSource, true) ? this.audioSource : null;
+        if (main && !main.playing) {
+            return main;
         }
         
         // 检查额外的音频源
-        for (const source of this.audioSources) {
-            if (!source.playing) {
+        for (const source of this.audioSources ?? []) {
+            if (isValid(source, true) && !source.playing) {
                 return source;
             }
         }
         
         // 如果所有音频源都在使用，返回主音频源（会中断当前播放）
-        return this.audioSource;
+        return main;
     }
     
     /**
@@ -248,23 +257,37 @@ export class AudioManager extends Component {
      * 停止所有播放
      */
     stopAllSounds() {
-        this.audioSource.stop();
-        for (const source of this.audioSources) {
-            source.stop();
+        // Cocos 在 onDestroy 后会把数组等引用置 null；旧场景可能仍持有此组件。
+        if (this.disposed) return;
+        this.playbackGeneration++;
+        if (isValid(this.audioSource, true)) this.audioSource.stop();
+        for (const source of this.audioSources ?? []) {
+            if (isValid(source, true)) source.stop();
         }
         this.synthEngine?.stopAll();
         this.activePlayCount = 0;
     }
+
+    /** 仅用于挑战结算 UI，不会写入演奏录制数据。 */
+    playChallengeResultCue(stars: number): boolean {
+        return this.synthEngine?.playChallengeResultCue(stars) ?? false;
+    }
+
+    /** 新成就提示音；与琴键播放、节拍器完全解耦。 */
+    playAchievementCue(): boolean {
+        return this.synthEngine?.playAchievementCue() ?? false;
+    }
     
     /**
      * 设置音量
-     * @param volume 音量 (0.0 - 2.5)
+     * @param volume 音量（0.0 - 1.35，给移动设备保留防削波余量）
      */
     setVolume(volume: number) {
+        if (this.disposed || !Number.isFinite(volume)) return;
         const vol = Math.max(0, Math.min(AudioManager.MAX_OUTPUT_GAIN, volume));
-        this.audioSource.volume = vol;
-        for (const source of this.audioSources) {
-            source.volume = vol;
+        if (isValid(this.audioSource, true)) this.audioSource.volume = vol;
+        for (const source of this.audioSources ?? []) {
+            if (isValid(source, true)) source.volume = vol;
         }
         this.synthEngine?.setVolume(vol);
     }
@@ -305,6 +328,7 @@ export class AudioManager extends Component {
     }
 
     setSynthStylePreset(preset: number) {
+        if (!Number.isFinite(preset)) return;
         const p = Math.max(0, Math.min(4, Math.floor(preset)));
         this.synthStylePreset = p as SynthStylePreset;
         this.applySynthParams();
@@ -329,9 +353,16 @@ export class AudioManager extends Component {
     }
 
     async resumeWebAudio(): Promise<boolean> {
-        if (!this.synthEngine || !this.synthEngine.isSupported()) return false;
-        await this.synthEngine.resume();
-        return this.synthEngine.getCurrentTime() !== null;
+        const engine = this.synthEngine;
+        if (this.disposed || !engine || !engine.isSupported()) return false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+            const ready = await Promise.race([
+                Promise.resolve(engine.resume()).then(() => true, () => false),
+                new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), 3000); }),
+            ]);
+            return ready && !this.disposed && this.synthEngine === engine && engine.isRunning();
+        } finally { if (timer !== undefined) clearTimeout(timer); }
     }
 
     scheduleMetronomeTick(at: number, accented: boolean): boolean {
@@ -379,93 +410,98 @@ export class AudioManager extends Component {
             switch (this.synthStylePreset) {
                 case SynthStylePreset.BRIGHT:
                     p = {
-                        attackSec: 0.005,
-                        fastDecaySec: 0.30,
-                        slowDecaySec: 1.55,
-                        basePeakGain: 0.72,
-                        fastDecayLevel: 0.12,
-                        overtoneRatio: 3.08,
-                        overtonePeakGain: 0.31,
-                        overtoneDecaySec: 0.22,
-                        transientFreqMul: 11.4,
-                        transientPeakGain: 0.12,
-                        transientDecaySec: 0.020,
-                        hpHz: 170,
-                        lpHz: 9200,
-                        presetGain: 1.02,
+                        // 通透但不尖：保留金属泛音，收住手机最容易刺耳的瞬态。
+                        attackSec: 0.006,
+                        fastDecaySec: 0.32,
+                        slowDecaySec: 1.75,
+                        basePeakGain: 0.68,
+                        fastDecayLevel: 0.105,
+                        overtoneRatio: 2.92,
+                        overtonePeakGain: 0.16,
+                        overtoneDecaySec: 0.20,
+                        transientFreqMul: 7.8,
+                        transientPeakGain: 0.055,
+                        transientDecaySec: 0.018,
+                        hpHz: 125,
+                        lpHz: 6800,
+                        presetGain: 0.98,
                     };
                     break;
                 case SynthStylePreset.DEEP:
                     p = {
-                        attackSec: 0.014,
-                        fastDecaySec: 0.82,
-                        slowDecaySec: 4.60,
-                        basePeakGain: 0.96,
-                        fastDecayLevel: 0.26,
-                        overtoneRatio: 2.36,
-                        overtonePeakGain: 0.14,
-                        overtoneDecaySec: 0.65,
-                        transientFreqMul: 6.4,
-                        transientPeakGain: 0.085,
-                        transientDecaySec: 0.060,
-                        hpHz: 45,
-                        lpHz: 5800,
-                        presetGain: 0.82,
+                        // 温厚但不轰：主体更饱满，短一些的尾音避免低音连续叠加。
+                        attackSec: 0.012,
+                        fastDecaySec: 0.55,
+                        slowDecaySec: 3.10,
+                        basePeakGain: 0.78,
+                        fastDecayLevel: 0.12,
+                        overtoneRatio: 2.28,
+                        overtonePeakGain: 0.08,
+                        overtoneDecaySec: 0.34,
+                        transientFreqMul: 5.3,
+                        transientPeakGain: 0.035,
+                        transientDecaySec: 0.028,
+                        hpHz: 75,
+                        lpHz: 4800,
+                        presetGain: 0.96,
                     };
                     break;
                 case SynthStylePreset.CRISP:
                     p = {
-                        attackSec: 0.0035,
-                        fastDecaySec: 0.20,
-                        slowDecaySec: 1.05,
-                        basePeakGain: 0.80,
-                        fastDecayLevel: 0.12,
-                        overtoneRatio: 3.31,
-                        overtonePeakGain: 0.32,
-                        overtoneDecaySec: 0.16,
-                        transientFreqMul: 13.2,
-                        transientPeakGain: 0.13,
-                        transientDecaySec: 0.014,
-                        hpHz: 195,
-                        lpHz: 10800,
-                        presetGain: 0.88,
+                        // 清晰短促：适合闯关跟弹，减少高倍频带来的刺耳和设备差异。
+                        attackSec: 0.004,
+                        fastDecaySec: 0.24,
+                        slowDecaySec: 1.35,
+                        basePeakGain: 0.66,
+                        fastDecayLevel: 0.08,
+                        overtoneRatio: 3.05,
+                        overtonePeakGain: 0.17,
+                        overtoneDecaySec: 0.13,
+                        transientFreqMul: 9.0,
+                        transientPeakGain: 0.065,
+                        transientDecaySec: 0.012,
+                        hpHz: 145,
+                        lpHz: 7200,
+                        presetGain: 0.96,
                     };
                     break;
                 case SynthStylePreset.POP:
                 default:
                     p = {
-                        attackSec: 0.009,
-                        fastDecaySec: 0.48,
-                        slowDecaySec: 2.45,
-                        basePeakGain: 0.86,
-                        fastDecayLevel: 0.16,
-                        overtoneRatio: 2.71,
-                        overtonePeakGain: 0.20,
-                        overtoneDecaySec: 0.36,
-                        transientFreqMul: 8.6,
-                        transientPeakGain: 0.09,
-                        transientDecaySec: 0.032,
+                        // 默认推荐：起音、木质主体和金属泛音最均衡，优先保证手机外放稳定。
+                        attackSec: 0.008,
+                        fastDecaySec: 0.38,
+                        slowDecaySec: 2.35,
+                        basePeakGain: 0.74,
+                        fastDecayLevel: 0.12,
+                        overtoneRatio: 2.76,
+                        overtonePeakGain: 0.12,
+                        overtoneDecaySec: 0.26,
+                        transientFreqMul: 6.8,
+                        transientPeakGain: 0.045,
+                        transientDecaySec: 0.022,
                         hpHz: 95,
-                        lpHz: 6200,
+                        lpHz: 5800,
                         presetGain: 1.00,
                     };
                     break;
                 case SynthStylePreset.AMBIENT:
                     p = {
-                        attackSec: 0.010,
-                        fastDecaySec: 0.95,
-                        slowDecaySec: 5.20,
-                        basePeakGain: 0.76,
-                        fastDecayLevel: 0.24,
-                        overtoneRatio: 2.98,
-                        overtonePeakGain: 0.14,
-                        overtoneDecaySec: 1.20,
-                        transientFreqMul: 7.1,
-                        transientPeakGain: 0.022,
-                        transientDecaySec: 0.075,
-                        hpHz: 120,
-                        lpHz: 7600,
-                        presetGain: 1.20,
+                        // 柔和延展：用较慢主体而非高能量泛音制造空间感，避免低音破裂。
+                        attackSec: 0.018,
+                        fastDecaySec: 0.62,
+                        slowDecaySec: 3.60,
+                        basePeakGain: 0.72,
+                        fastDecayLevel: 0.09,
+                        overtoneRatio: 2.62,
+                        overtonePeakGain: 0.075,
+                        overtoneDecaySec: 0.52,
+                        transientFreqMul: 5.8,
+                        transientPeakGain: 0.018,
+                        transientDecaySec: 0.030,
+                        hpHz: 115,
+                        lpHz: 5600,
+                        presetGain: 0.98,
                     };
                     break;
             }
@@ -497,5 +533,16 @@ export class AudioManager extends Component {
             return this.synthEngine.getActiveVoiceCount();
         }
         return 0;
+    }
+
+    onDestroy() {
+        if (this.disposed) return;
+        this.disposed = true;
+        if (AudioManager.instance === this) AudioManager.instance = null;
+        const engine = this.synthEngine;
+        this.synthEngine = null;
+        this.audioSource = null;
+        this.audioSources.length = 0;
+        engine?.dispose();
     }
 }

@@ -1,4 +1,4 @@
-import { _decorator, BlockInputEvents, Button, Color, Component, Graphics, Label, Node, UITransform, Widget } from 'cc';
+import { _decorator, BlockInputEvents, Button, Color, Component, Graphics, Label, Node, UITransform, Widget, isValid } from 'cc';
 import { LEVEL_CATALOG } from '../gameplay/LevelCatalog';
 import { LevelProgressStore } from '../manager/LevelProgressStore';
 const { ccclass } = _decorator;
@@ -16,6 +16,7 @@ export class LevelSelectOverlay extends Component {
     private root: Node | null = null;
     private panel: Node | null = null;
     private onSelect: ((levelId: string) => void) | null = null;
+    private onClose: (() => void) | null = null;
 
     onLoad() {
         const parentUi = this.node.getComponent(UITransform);
@@ -29,8 +30,9 @@ export class LevelSelectOverlay extends Component {
         this.root.active = false;
     }
 
-    open(unlockedLevelIds: string[], onSelect: (levelId: string) => void) {
+    open(unlockedLevelIds: string[], onSelect: (levelId: string) => void, onClose?: () => void) {
         this.onSelect = onSelect;
+        if (onClose) this.onClose = onClose;
         if (!this.root) return;
         this.root.active = true;
         this.root.setSiblingIndex(this.node.children.length - 1);
@@ -39,6 +41,7 @@ export class LevelSelectOverlay extends Component {
 
     close() {
         if (this.root) this.root.active = false;
+        this.onClose?.();
     }
 
     isOpen(): boolean {
@@ -232,7 +235,11 @@ export class LevelSelectOverlay extends Component {
     }
 
     onDestroy() {
-        this.panel?.destroy();
-        this.root?.destroy();
+        this.onClose = null;
+        this.onSelect = null;
+        if (isValid(this.panel, true)) this.panel.destroy();
+        if (isValid(this.root, true)) this.root.destroy();
+        this.panel = null;
+        this.root = null;
     }
 }

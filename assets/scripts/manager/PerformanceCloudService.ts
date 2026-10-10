@@ -1,31 +1,14 @@
-import { getWx } from './WeChatNative';
 import { PERFORMANCE_MAX_DURATION_MS, PERFORMANCE_MAX_ENCODED_SIZE, PERFORMANCE_MAX_EVENTS, PerformanceSharePayload, type PerformanceRecord } from './PerformanceTypes';
 import { PerformanceRecorder } from './PerformanceRecorder';
+import { callWxCloudFunction } from './WeChatCloudFunction';
+import { ContentSecurityError } from './ContentSecurityService';
 
-type CallResult<T> = {
-    result?: T;
-};
-
-type CreateResult = PerformanceSharePayload;
+type CreateResult = PerformanceSharePayload & { securityStatus?: string; contentSecurityVersion?: number };
 
 type GetResult = {
     record: PerformanceRecord;
+    contentSecurityVersion?: number;
 };
-
-function callWxCloudFunction<T>(name: string, data: Record<string, unknown>): Promise<T> {
-    const wxApi = getWx() as {
-        cloud?: {
-            callFunction?: (arg: { name: string; data: Record<string, unknown> }) => Promise<CallResult<T>>;
-        };
-    } | undefined;
-    if (!wxApi?.cloud?.callFunction) {
-        return Promise.reject(new Error('wx.cloud.callFunction is unavailable'));
-    }
-    return wxApi.cloud.callFunction({ name, data }).then((res) => {
-        if (!res?.result) throw new Error('empty cloud result');
-        return res.result;
-    });
-}
 
 export class PerformanceCloudService {
     static async createRecord(record: PerformanceRecord): Promise<string> {
@@ -38,15 +21,22 @@ export class PerformanceCloudService {
         if (encoded.length > PERFORMANCE_MAX_ENCODED_SIZE) {
             throw new Error('encoded payload too large');
         }
-        const result = await callWxCloudFunction<CreateResult>('createPerformanceRecord', {
-            durationMs: record.durationMs,
-            stylePreset: record.stylePreset,
-            title: record.title ?? '',
-            eventsEncoded: encoded,
-            eventCount: record.events.length,
-            appVersion: record.appVersion,
-        });
-        if (!result?.recordId) throw new Error('missing recordId');
+        let result: CreateResult;
+        try {
+            result = await callWxCloudFunction<CreateResult>('createPerformanceRecord', {
+                durationMs: record.durationMs,
+                stylePreset: record.stylePreset,
+                title: record.title ?? '',
+                eventsEncoded: encoded,
+                eventCount: record.events.length,
+                appVersion: record.appVersion,
+            });
+        } catch { throw new ContentSecurityError(); }
+        if (result?.securityStatus) throw new ContentSecurityError(result.securityStatus === 'reject');
+        // Mixed deployments must not treat an old function's ID as proof of moderation.
+        if (result?.contentSecurityVersion !== 1 || typeof result.recordId !== 'string' || !result.recordId.trim()) {
+            throw new ContentSecurityError();
+        }
         return result.recordId;
     }
 
@@ -54,6 +44,11 @@ export class PerformanceCloudService {
         if (!recordId) throw new Error('recordId is required');
         const result = await callWxCloudFunction<GetResult>('getPerformanceRecord', { recordId });
         if (!result?.record) throw new Error('record not found');
-        return result.record;
+        const record = { ...result.record, title: result.contentSecurityVersion === 1 &&
+            typeof result.record.title === 'string' && result.record.title.length <= 40
+            ? result.record.title : '《分享演奏》' };
+        const error = PerformanceRecorder.validate(record);
+        if (error) throw new Error(`invalid shared record: ${error}`);
+        return record;
     }
 }

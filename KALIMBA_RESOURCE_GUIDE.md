@@ -91,7 +91,7 @@ assets/
 │       └── icon.png
 └── scripts/
     ├── AudioManager.ts     # 音频管理
-    ├── ResourceManager.ts  # 资源管理
+    ├── SheetMusicBackground.ts # 琴谱/背景图片加载（scripts/view 下）
     └── KalimbaKey.ts      # 琴键逻辑
 ```
 
@@ -134,9 +134,8 @@ assets/
 - 实现音效预加载和缓存
 
 ### 2. 资源管理
-- ResourceManager负责贴图加载和缓存
-- 支持主题切换功能
-- 实现资源预加载优化性能
+- 当前琴谱/背景图片由 `scripts/view/SheetMusicBackground.ts` 加载。
+- 2026-10-10 已移除没有场景绑定和调用方的 `ResourceManager` 示例；上面的多主题目录是规划示例，并非当前已接入功能。
 
 ### 3. 交互体验
 - 触摸反馈动画效果
@@ -198,4 +197,4 @@ assets/
 
 ---
 
-**记住**: 先实现基本功能，再追求完美效果。一个简单但完整的游戏比一个复杂但未完成的游戏更有价值！ 
+**记住**: 先实现基本功能，再追求完美效果。一个简单但完整的游戏比一个复杂但未完成的游戏更有价值！

@@ -1,11 +1,15 @@
-import { _decorator, Component, EditBox, sys, UITransform, Label } from 'cc';
+import { _decorator, Component, EditBox, UITransform, Label, isValid } from 'cc';
 import { getWx } from '../manager/WeChatNative';
+import { ContentSecurityService } from '../manager/ContentSecurityService';
+import { showToast } from './SimpleToast';
+import { PerformanceAppearanceStore } from '../manager/PerformanceAppearanceStore';
+import { showBusyIndicator } from './AppearanceFeedback';
 const { ccclass, property } = _decorator;
 
 /**
  * 与 EditBox 挂在同一节点（或指定 editBox）：
  * - 展示/编辑短标题，最多 maxChars 字（默认 10）
- * - 可选 localStorage 持久化
+ * - 仅在本次运行中保留已审核文案
  *
  * 【更简单：浮在 pianoHor 上面】不要当 pianoHor 子节点。
  * 1）与 pianoHor **同级**（都在 Canvas 下新建一空节点，例如 CaptionFloat）。
@@ -21,10 +25,10 @@ export class EditableCaption extends Component {
     @property({ tooltip: '最大字符数（中文按字计）' })
     maxChars: number = 10;
 
-    @property({ tooltip: '留空则不做本地保存；否则用该 key 存取文字' })
+    @property({ tooltip: '旧版存储 key，仅用于清理旧存档' })
     storageKey: string = 'user_caption';
 
-    @property({ tooltip: '启动时从 localStorage 读取（需 storageKey 非空）' })
+    @property({ tooltip: '保留旧场景兼容；现在总是同步恢复本次运行文案' })
     loadOnStart: boolean = true;
 
     @property({ tooltip: '无存档时的默认标题（占位已去掉，首次进入显示此文案）' })
@@ -40,6 +44,11 @@ export class EditableCaption extends Component {
     textBold: boolean = true;
 
     private _eb: EditBox | null = null;
+    private approvedText = '';
+    private checkRevision = 0;
+    private checking = false;
+    private acceptingInput = true;
+    private closeLoading: (() => void) | null = null;
 
 
     /**
@@ -65,14 +74,11 @@ export class EditableCaption extends Component {
         // 单行输入：避免出现多行文本框的上下拉伸/换行指示（Web 上 textarea 角标等）
         this._eb.inputMode = EditBox.InputMode.SINGLE_LINE;
 
-        if (this.loadOnStart && this.storageKey) {
-            const saved = sys.localStorage.getItem(this.storageKey);
-            if (saved === null) {
-                this._eb.string = this.clamp(this.defaultCaption);
-            } else {
-                this._eb.string = this.clamp(saved);
-            }
-        }
+        PerformanceAppearanceStore.removeLegacyStorage(this.storageKey);
+        this.approvedText = this.clamp(PerformanceAppearanceStore.getCaption(this.defaultCaption));
+        this._eb.string = this.approvedText;
+        // 空标题应当真正显示为空，不由 EditBox 占位文案补回默认标题。
+        if (this._eb.placeholderLabel) this._eb.placeholderLabel.string = '';
 
         this._eb.node.on(EditBox.EventType.TEXT_CHANGED, this.onTextChanged, this);
         this._eb.node.on(EditBox.EventType.EDITING_DID_ENDED, this.onEditEnd, this);
@@ -126,7 +132,25 @@ export class EditableCaption extends Component {
         apply(eb.placeholderLabel, false);
     }
 
+    onEnable() { this.acceptingInput = true; }
+
+    onDisable() {
+        this.acceptingInput = false;
+        this.closeLoading?.();
+        this.closeLoading = null;
+        this.checkRevision++;
+        this.checking = false;
+        if (this._eb?.isValid) {
+            this._eb.string = this.approvedText;
+            this._eb.enabled = true;
+        }
+    }
+
     onDestroy() {
+        this.acceptingInput = false;
+        this.closeLoading?.();
+        this.closeLoading = null;
+        this.checkRevision++;
         if (this._eb && this._eb.isValid) {
             this._eb.node.off(EditBox.EventType.TEXT_CHANGED, this.onTextChanged, this);
             this._eb.node.off(EditBox.EventType.EDITING_DID_ENDED, this.onEditEnd, this);
@@ -143,6 +167,11 @@ export class EditableCaption extends Component {
 
     private onTextChanged() {
         if (!this._eb) return;
+        // Native keyboard callbacks can arrive after EditBox was disabled or the view changed.
+        if (this.checking || !this.acceptingInput) {
+            this._eb.string = this.approvedText;
+            return;
+        }
         let t = this._eb.string;
         if (/[\r\n]/.test(t)) {
             t = t.replace(/[\r\n]+/g, '');
@@ -156,13 +185,46 @@ export class EditableCaption extends Component {
     }
 
     private onEditEnd() {
-        if (this._eb && this.storageKey) {
-            sys.localStorage.setItem(this.storageKey, this._eb.string);
+        if (!this._eb) return;
+        if (this.checking || !this.acceptingInput) {
+            this._eb.string = this.approvedText;
+            return;
         }
+        const candidate = this.clamp(this._eb.string.replace(/[\r\n]+/g, '').trim());
+        // Restore immediately while the request is pending. Recording reads approvedText only.
+        this._eb.string = this.approvedText;
         this.hideWechatKeyboard();
-        this.scheduleOnce(() => {
-            this.alignInnerLabels();
-        }, 0);
+        this.alignInnerLabels();
+        if (candidate !== this.approvedText) void this.approveAndApply(candidate);
+    }
+
+    private async approveAndApply(candidate: string) {
+        const revision = ++this.checkRevision;
+        this.checking = true;
+        if (this._eb) this._eb.enabled = false;
+        try {
+            // 清空不是用户生成文本，不需要联网，也不能因额度/断网而清空失败。
+            if (candidate) {
+                this.closeLoading = showBusyIndicator(this.node, '正在检测文案，请稍候…').close;
+                await ContentSecurityService.requireText(candidate);
+            }
+            if (!isValid(this, true) || revision !== this.checkRevision || !isValid(this._eb, true)) return;
+            this.approvedText = candidate;
+            this._eb.string = candidate;
+            PerformanceAppearanceStore.setCaption(candidate);
+        } catch (error) {
+            if (isValid(this, true) && revision === this.checkRevision) {
+                showToast(this.node, ContentSecurityService.message(error), 2);
+            }
+        } finally {
+            if (isValid(this, true) && revision === this.checkRevision) {
+                this.closeLoading?.();
+                this.closeLoading = null;
+                this.checking = false;
+                if (this._eb?.isValid) this._eb.enabled = true;
+                this.alignInnerLabels();
+            }
+        }
     }
 
     /** 微信小游戏：部分机型上仅失焦不会收起键盘，需显式 hideKeyboard */
@@ -177,14 +239,22 @@ export class EditableCaption extends Component {
         }
     }
 
+    restoreSessionCaption() { this.setText(PerformanceAppearanceStore.getCaption(this.defaultCaption)); }
+
     /** 外部读取当前文案 */
     get text(): string {
-        return this._eb?.string ?? '';
+        return this.approvedText;
     }
 
-    /** 外部设置文案（会截断到 maxChars） */
+    /** 仅供内置关卡或服务端已审核的分享标题使用；用户输入走 approveAndApply。 */
     setText(value: string) {
         if (!this._eb) return;
-        this._eb.string = this.clamp(value ?? '');
+        this.closeLoading?.();
+        this.closeLoading = null;
+        this.checkRevision++;
+        this.checking = false;
+        this._eb.enabled = true;
+        this.approvedText = this.clamp(value ?? '');
+        this._eb.string = this.approvedText;
     }
 }

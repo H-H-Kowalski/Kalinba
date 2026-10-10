@@ -3,8 +3,11 @@ import type { AudioManager } from './AudioManager';
 
 const KEY = 'kalinba_audio_settings_v1';
 
-/** 应用内主输出增益：默认提升到 250%（较原始 100% 增加 150%） */
-export const DEFAULT_APP_GAIN = 3.75;
+/**
+ * WebAudio 主输出保持在线性安全区。手机外放的动态余量远小于桌面浏览器，
+ * 过高增益会持续顶住压缩器，听起来像破音、颤动或音高异常。
+ */
+export const DEFAULT_APP_GAIN = 1.15;
 
 export interface AudioSettingsSnapshot {
     useSynth: boolean;
@@ -33,8 +36,8 @@ export class AudioSettingsStore {
                     typeof o.synthStylePreset === 'number' && o.synthStylePreset >= 0 && o.synthStylePreset <= 4
                         ? Math.floor(o.synthStylePreset)
                         : d.synthStylePreset,
-                useManualSynthTuning:
-                    typeof o.useManualSynthTuning === 'boolean' ? o.useManualSynthTuning : d.useManualSynthTuning,
+                // 旧版本曾允许 Inspector 手动参数覆盖预设；现在统一使用经过真机约束的五档音色。
+                useManualSynthTuning: false,
             };
         } catch {
             return this.defaultSnapshot();
@@ -57,7 +60,7 @@ export class AudioSettingsStore {
         // 固定合成音策略：忽略存档里的 useSynth
         am.setUseSynth(true);
         am.setSynthStylePreset(s.synthStylePreset);
-        am.setUseManualSynthTuning(s.useManualSynthTuning);
+        am.setUseManualSynthTuning(false);
         am.setVolume(DEFAULT_APP_GAIN);
     }
 

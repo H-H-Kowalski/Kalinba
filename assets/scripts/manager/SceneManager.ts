@@ -1,4 +1,4 @@
-import { _decorator, Component, director, Scene } from 'cc';
+import { _decorator, Component, director, Scene, isValid } from 'cc';
 const { ccclass, property } = _decorator;
 
 /** 设置页关闭后应回到的场景 */
@@ -34,7 +34,7 @@ export class SceneManager extends Component {
     };
 
     public static getInstance(): SceneManager {
-        return SceneManager.instance;
+        return isValid(SceneManager.instance, true) ? SceneManager.instance : null;
     }
 
     start() {
@@ -122,6 +122,6 @@ export class SceneManager extends Component {
     }
 
     onDestroy() {
-        SceneManager.instance = null;
+        if (SceneManager.instance === this) SceneManager.instance = null;
     }
 }

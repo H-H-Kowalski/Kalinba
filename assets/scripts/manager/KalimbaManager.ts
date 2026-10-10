@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, Prefab, instantiate, Vec3, UITransform, view, Label, Color } from 'cc';
+import { _decorator, Component, Node, Prefab, instantiate, Vec3, UITransform, view, Label, Color, isValid } from 'cc';
 import { KalimbaKey } from '../KalimbaKey';
 import { AudioManager } from './AudioManager';
 import { applySavedFontToSubtree } from './GlobalFontApplier';
@@ -185,7 +185,7 @@ export class KalimbaManager extends Component {
      * 获取音频管理器
      */
     getAudioManager(): AudioManager {
-        return this.audioManager;
+        return isValid(this.audioManager, true) ? this.audioManager : null;
     }
 
     /**
@@ -221,4 +221,4 @@ export class KalimbaManager extends Component {
         }
         return null;
     }
-} 
+}

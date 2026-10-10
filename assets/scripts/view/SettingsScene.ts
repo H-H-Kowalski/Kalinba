@@ -26,6 +26,7 @@ import { applySavedFontToSubtree, invalidateFontCache } from '../manager/GlobalF
 import { SettingLabel } from './SettingLabel';
 import { showToast } from './SimpleToast';
 import { MetronomeSettingsStore } from '../manager/MetronomeSettingsStore';
+import { ProceduralMenuBgm } from '../manager/ProceduralMenuBgm';
 const { ccclass, property } = _decorator;
 
 /**
@@ -106,6 +107,8 @@ export class SettingsScene extends Component {
     }
 
     start() {
+        // BGM 严格限定在首页；从首页或演奏页进入设置均保持静音。
+        ProceduralMenuBgm.stop(true);
         this.buildUnifiedSettingsUI();
         void applySavedFontToSubtree(this.node);
     }
@@ -154,7 +157,7 @@ export class SettingsScene extends Component {
             return card;
         };
 
-        const soundRow = makeRow('SoundRow', '音色', '选择琴声质感', 168);
+        const soundRow = makeRow('SoundRow', '音色', '推荐“流行”，兼顾手机外放', 168);
         this.styleNames.forEach((text, index) => {
             this.makeUnifiedOption(soundRow, text, -210 + index * 135, 0, 118, audio.synthStylePreset === index, () => {
                 AudioSettingsStore.save({ synthStylePreset: index, useManualSynthTuning: false });
@@ -162,14 +165,13 @@ export class SettingsScene extends Component {
             });
         });
 
-        const sheetRow = makeRow('SheetRow', '琴谱方向', '长图固定纵向', 62);
+        const sheetRow = makeRow('SheetRow', '琴谱方向', '长图也会记住此选择', 62);
         ['横向翻页', '纵向翻页'].forEach((text, index) => {
             this.makeUnifiedOption(sheetRow, text, -115 + index * 200, 0, 176, sheet.pageTurnMode === index, () => {
-                if (index === 0 && SheetRuntimeStore.isLongImageActive()) {
-                    showToast(this.node, '长图仅支持纵向滚动');
-                    return;
-                }
                 SheetSettingsStore.save({ pageTurnMode: index });
+                if (index === 0 && SheetRuntimeStore.isLongImageActive()) {
+                    showToast(this.node, '已保存：长图将按横向分页显示');
+                }
                 this.rebuildUnifiedSettingsUI();
             });
         });
@@ -194,8 +196,41 @@ export class SettingsScene extends Component {
                 this.rebuildUnifiedSettingsUI();
             });
         });
-        this.makeUnifiedLabel(root, 'Footer', '设置会自动保存，并同时用于自由演奏与挑战模式', 0, -252, 760, 34, 15, muted);
+        this.makeUnifiedLabel(root, 'Footer', '设置会自动保存，并同时用于自由演奏与挑战模式', -65, -252, 700, 34, 15, muted);
+        this.makeUnifiedButton(root, 'GameplayGuide', '玩法说明', 445, -252, 124, 42, new Color(151, 91, 47, 255), new Color(255, 246, 219, 255), () => this.showGameplayGuide());
         void applySavedFontToSubtree(root);
+    }
+
+    private showGameplayGuide() {
+        const root = this.unifiedSettingsRoot;
+        if (!root?.isValid) return;
+        root.getChildByName('GameplayGuideOverlay')?.destroy();
+        const overlay = new Node('GameplayGuideOverlay');
+        overlay.layer = root.layer;
+        overlay.setParent(root);
+        overlay.addComponent(UITransform).setContentSize(1120, 620);
+        overlay.addComponent(BlockInputEvents);
+        const mask = this.makeUnifiedShape(overlay, 'Mask', 1120, 620, 0, 0, new Color(48, 32, 19, 195), new Color(48, 32, 19, 0), 0, 0);
+        const close = () => overlay.isValid && overlay.destroy();
+        mask.addComponent(Button).transition = Button.Transition.NONE;
+        mask.on(Button.EventType.CLICK, close, this);
+        const panel = this.makeUnifiedShape(overlay, 'GuidePanel', 720, 430, 0, 0, new Color(255, 246, 217, 255), new Color(151, 78, 34, 255), 28, 3);
+        panel.addComponent(BlockInputEvents);
+        this.makeUnifiedLabel(panel, 'Title', '玩法说明', 0, 160, 560, 48, 30, new Color(139, 68, 31, 255));
+        const body = this.makeUnifiedLabel(
+            panel,
+            'Body',
+            '自由演奏：点击银色琴键发声，点击琴架标题可修改曲名。\n\n节奏：开启提示音帮助跟拍；提示音不会进入录制。\n\n录制：点击右侧 ▶ 开始，再点一次停止。完成后可试听、分享或重新录制；再次点击录制入口只会打开已有结果，不会直接覆盖。\n\n沉浸：点击左下角隐藏两侧按钮，再点“显示”即可恢复。',
+            0,
+            10,
+            620,
+            260,
+            19,
+            new Color(92, 54, 29, 255),
+        );
+        body.lineHeight = 30;
+        this.makeUnifiedButton(panel, 'CloseGuide', '知道了', 0, -168, 150, 48, new Color(139, 68, 31, 255), new Color(255, 246, 219, 255), close);
+        void applySavedFontToSubtree(overlay);
     }
 
     private makeUnifiedShape(parent: Node, name: string, width: number, height: number, x: number, y: number, fill: Color, stroke: Color, radius: number, lineWidth: number): Node {
@@ -512,15 +547,10 @@ export class SettingsScene extends Component {
 
     private selectPageTurn(index: number) {
         const next = Math.max(0, Math.min(this.pageTurnNames.length - 1, index));
-        if (next === 0 && SheetRuntimeStore.isLongImageActive()) {
-            showToast(this.node, '长图仅支持纵向滚动，无法切换为横向');
-            this.scheduleOnce(() => {
-                void applySavedFontToSubtree(this.node);
-            }, 0);
-            this.refreshPageTurnList(SheetSettingsStore.load().pageTurnMode);
-            return;
-        }
         SheetSettingsStore.save({ pageTurnMode: next });
+        if (next === 0 && SheetRuntimeStore.isLongImageActive()) {
+            showToast(this.node, '已保存：长图将按横向分页显示');
+        }
         this.refreshPageTurnList(next);
     }
 

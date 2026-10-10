@@ -1,4 +1,5 @@
 const cloud = require('wx-server-sdk');
+const { checkText } = require('./security');
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
@@ -73,6 +74,12 @@ exports.main = async (event) => {
 
   const payload = ensurePayload(event || {});
   await checkRateLimit(openid);
+  // 空标题没有待审核内容；身份、频率和录音校验仍照常执行。
+  const safety = payload.title ? await checkText(cloud, openid, payload.title) : { status: 'pass' };
+  if (safety.status !== 'pass') {
+    console.warn('[ContentSecurity] record title', safety);
+    return { securityStatus: safety.status };
+  }
 
   const now = Date.now();
   const expireAtMs = now + EXPIRE_DAYS * 24 * 60 * 60 * 1000;
@@ -83,6 +90,7 @@ exports.main = async (event) => {
       recordId,
       ownerOpenId: openid,
       title: payload.title,
+      contentSecurityVersion: 1,
       stylePreset: payload.stylePreset,
       durationMs: payload.durationMs,
       eventCount: payload.eventCount,
@@ -94,5 +102,5 @@ exports.main = async (event) => {
     },
   });
 
-  return { recordId };
+  return { recordId, contentSecurityVersion: 1 };
 };

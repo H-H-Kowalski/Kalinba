@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, AudioSource, AudioClip, UITransform, Color, Sprite, tween, Tween, Vec3, Label, instantiate } from 'cc';
+import { _decorator, Component, Node, AudioSource, AudioClip, UITransform, Color, Sprite, tween, Tween, Vec3, Label, instantiate, isValid } from 'cc';
 import { AudioManager } from './manager/AudioManager';
 import { vibrateKeyTap } from './manager/HapticFeedback';
 import { PerformanceRecorder } from './manager/PerformanceRecorder';
@@ -41,13 +41,16 @@ export class KalimbaKey extends Component {
     private defaultScale: Vec3 = new Vec3(1, 1, 1);
     private normalSpriteColor: Color = new Color(255, 255, 255, 255);
     private guidanceActive = false;
+    private disposed = false;
 
     static getByIndex(index: number): KalimbaKey | null {
-        return KalimbaKey.keyRegistry.get(index) ?? null;
+        const key = KalimbaKey.keyRegistry.get(index);
+        return isValid(key, true) && !key.disposed ? key : null;
     }
 
     static setGuidanceKey(keyIndex: number | null): void {
         for (const [index, key] of KalimbaKey.keyRegistry) {
+            if (!isValid(key, true) || key.disposed) continue;
             key.setGuidanceActive(keyIndex !== null && index === keyIndex);
         }
     }
@@ -125,6 +128,7 @@ export class KalimbaKey extends Component {
 
     /** 按下即给出金属弹片的暖高光与短促下压。 */
     onTouchStart(event: any) {
+        if (this.disposed || !isValid(this, true)) return;
         this.isPressed = true;
         
         if (this.sprite) {
@@ -142,6 +146,7 @@ export class KalimbaKey extends Component {
      * 松开：恢复不透明
      */
     onTouchEnd() {
+        if (this.disposed || !isValid(this, true)) return;
         if (!this.isPressed) return;
         this.isPressed = false;
         this.applyPressedVisual(false);
@@ -186,6 +191,7 @@ export class KalimbaKey extends Component {
 
     /** 回放时的按键视觉反馈：短暂按下再抬起 */
     playReplayPress(durationMs = 85): void {
+        if (this.disposed || !isValid(this, true)) return;
         this.replayVisualToken += 1;
         const token = this.replayVisualToken;
         this.applyPressedVisual(true);
@@ -267,7 +273,10 @@ export class KalimbaKey extends Component {
     }
 
     onDestroy() {
-        KalimbaKey.keyRegistry.delete(this.keyIndex);
+        if (this.disposed) return;
+        this.disposed = true;
+        if (KalimbaKey.keyRegistry.get(this.keyIndex) === this) KalimbaKey.keyRegistry.delete(this.keyIndex);
+        if (!isValid(this.node, true)) return;
         this.node.off(Node.EventType.TOUCH_START, this.onTouchStart, this);
         this.node.off(Node.EventType.TOUCH_END, this.onTouchEnd, this);
         this.node.off(Node.EventType.TOUCH_CANCEL, this.onTouchEnd, this);

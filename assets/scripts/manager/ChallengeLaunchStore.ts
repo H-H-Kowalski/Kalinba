@@ -21,4 +21,12 @@ export class ChallengeLaunchStore {
             return '';
         }
     }
+
+    static hasPending(): boolean {
+        try {
+            return !!sys.localStorage.getItem(KEY);
+        } catch {
+            return false;
+        }
+    }
 }

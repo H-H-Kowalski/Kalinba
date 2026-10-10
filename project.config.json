@@ -1,0 +1,62 @@
+{
+  "description": "拇指琴演奏家微信小游戏（游戏构建与云函数统一工程）",
+  "miniprogramRoot": "build/wechatgame/",
+  "cloudfunctionRoot": "cloudfunctions/",
+  "compileType": "game",
+  "libVersion": "widelyUsed",
+  "appid": "wxb2a7f0acac129233",
+  "projectname": "拇指琴演奏家",
+  "setting": {
+    "urlCheck": true,
+    "postcss": true,
+    "minified": true,
+    "newFeature": false,
+    "enhance": true,
+    "useIsolateContext": true,
+    "es6": false,
+    "compileWorklet": false,
+    "uglifyFileName": false,
+    "uploadWithSourceMap": true,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "minifyWXSS": true,
+    "minifyWXML": true,
+    "localPlugins": false,
+    "disableUseStrict": false,
+    "useCompilerPlugins": false,
+    "condition": false,
+    "swc": false,
+    "disableSWC": true,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
+  },
+  "condition": {
+    "search": {
+      "current": -1,
+      "list": []
+    },
+    "conversation": {
+      "current": -1,
+      "list": []
+    },
+    "game": {
+      "currentL": -1,
+      "list": [],
+      "current": -1
+    },
+    "miniprogram": {
+      "current": -1,
+      "list": []
+    }
+  },
+  "simulatorPluginLibVersion": {},
+  "packOptions": {
+    "ignore": [],
+    "include": []
+  },
+  "isGameTourist": false,
+  "editorSetting": {}
+}

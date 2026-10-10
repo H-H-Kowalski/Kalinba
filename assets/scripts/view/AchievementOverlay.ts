@@ -1,7 +1,9 @@
 import { BlockInputEvents, Button, Color, Graphics, Label, Node, UITransform, Widget } from 'cc';
-import { ACHIEVEMENT_CATALOG } from '../gameplay/AchievementCatalog';
+import { ACHIEVEMENT_CATALOG, resolveAchievementIds } from '../gameplay/AchievementCatalog';
 import { AchievementCloudService, type UserAchievementStats } from '../manager/AchievementCloudService';
 import { LevelProgressStore, type LocalChallengeSummary } from '../manager/LevelProgressStore';
+import { getWx } from '../manager/WeChatNative';
+import { showToast } from './SimpleToast';
 
 type DisplayStats = {
     totalStars: number;
@@ -77,18 +79,21 @@ function renderAchievementOverlay(
     panelWidget.verticalCenter = 0;
     panelWidget.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
 
-    makeLabel(panel, '成就图鉴', 38, WOOD, 0, panelH / 2 - 48, panelW - 250, 52);
+    const header = makeShape(panel, 'AchievementHeader', panelW - 24, 84, WOOD, 24, GOLD, 2);
+    header.setPosition(0, panelH / 2 - 54, 0);
+    makeLabel(header, '成就图鉴', 34, new Color(255, 246, 216, 255), -70, 13, panelW - 380, 44);
     makeLabel(
-        panel,
+        header,
         cloud ? '微信档案已同步' : '当前显示本地进度 · 微信环境会自动同步',
-        16,
-        cloud ? new Color(74, 119, 62, 255) : MUTED,
-        0,
-        panelH / 2 - 84,
-        panelW - 220,
-        30,
+        14,
+        cloud ? new Color(196, 235, 170, 255) : new Color(245, 211, 151, 255),
+        -70,
+        -20,
+        panelW - 380,
+        24,
     );
-    makeButton(panel, 'CloseButton', '×', 54, 54, panelW / 2 - 46, panelH / 2 - 44, close, WOOD, PAPER);
+    makeButton(header, 'ShareButton', '分享', 104, 46, panelW / 2 - 145, 0, () => shareAchievementArchive(canvas, stats), new Color(88, 139, 72, 255), PAPER);
+    makeButton(header, 'CloseButton', '×', 50, 50, panelW / 2 - 53, 0, close, new Color(104, 52, 26, 255), PAPER);
 
     const unlockedCount = stats.unlockedIds.size;
     const statY = panelH / 2 - 128;
@@ -136,14 +141,30 @@ function mergeStats(local: LocalChallengeSummary, cloud: UserAchievementStats | 
     const maxCombo = Math.max(local.maxCombo, cloud?.maxCombo ?? 0);
     const completedCount = Math.max(local.completedLevelIds.length, cloud?.completedLevelIds?.length ?? 0);
     const unlockedIds = new Set<string>(cloud?.achievementIds ?? []);
-    if (completedCount >= 1) unlockedIds.add('first_challenge');
-    if (totalStars >= 3) unlockedIds.add('three_stars_total');
-    if (maxCombo >= 20) unlockedIds.add('combo_20');
-    if (maxCombo >= 50) unlockedIds.add('combo_50');
-    if (totalNotes >= 100) unlockedIds.add('notes_100');
-    if (totalNotes >= 500) unlockedIds.add('notes_500');
-    if (completedCount >= 9) unlockedIds.add('complete_launch_catalog');
+    for (const id of resolveAchievementIds({ completedCount, totalStars, totalNotes, maxCombo })) unlockedIds.add(id);
     return { totalStars, totalNotes, maxCombo, completedCount, unlockedIds };
+}
+
+function shareAchievementArchive(canvas: Node, stats: DisplayStats) {
+    const wxApi = getWx() as {
+        shareAppMessage?: (arg: { title?: string; query?: string }) => void;
+    } | undefined;
+    if (!wxApi?.shareAppMessage) {
+        showToast(canvas, '微信真机中可分享成就档案', 1.5);
+        return;
+    }
+    const latest = [...ACHIEVEMENT_CATALOG].reverse().find((item) => stats.unlockedIds.has(item.id));
+    const suffix = latest ? `，最新获得「${latest.title}」` : '';
+    try {
+        wxApi.shareAppMessage({
+            title: `我在拇指琴演奏家点亮了 ${stats.unlockedIds.size} 个成就${suffix}！`,
+            query: 'achievement=1',
+        });
+        showToast(canvas, '已拉起成就分享', 1.3);
+    } catch (e) {
+        const message = e instanceof Error ? e.message : 'unknown error';
+        showToast(canvas, `分享失败：${message}`, 1.6);
+    }
 }
 
 function getProgress(id: string, stats: DisplayStats): AchievementProgress {

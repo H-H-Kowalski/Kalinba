@@ -1,4 +1,4 @@
-import { _decorator, Component } from 'cc';
+import { _decorator, Component, isValid } from 'cc';
 import { KalimbaKey } from '../KalimbaKey';
 import { AudioManager } from '../manager/AudioManager';
 import { RhythmJudge } from './RhythmJudge';
@@ -18,12 +18,16 @@ export class ChallengeSession extends Component {
     private judge: RhythmJudge | null = null;
     private active = false;
     private paused = false;
+    private followMode = false;
     private pausedAtSec = 0;
     private startedAtSec = 0;
     private clockOriginMs = 0;
     private resultCallback: ((result: LevelResult) => void) | null = null;
     private judgeCallback: ((event: JudgeEvent) => void) | null = null;
     private debugInvalidClockLogged = false;
+    private beginRequest = 0;
+    private acceptingStarts = true;
+    private disposed = false;
 
     start() {
         if (!this.audioManager) {
@@ -38,10 +42,17 @@ export class ChallengeSession extends Component {
         level: LevelDefinition,
         onResult?: (result: LevelResult) => void,
         onJudge?: (event: JudgeEvent) => void,
+        followMode = false,
     ): Promise<boolean> {
-        if (!this.audioManager) return false;
-        const ready = await this.audioManager.resumeWebAudio();
-        const audioNow = this.audioManager.getAudioCurrentTime();
+        const audio = this.audioManager;
+        if (this.disposed || !this.acceptingStarts || !isValid(this, true) || !isValid(audio, true)) return false;
+        this.stop();
+        const request = this.beginRequest;
+        let ready = false;
+        try { ready = await audio.resumeWebAudio(); } catch { return false; }
+        if (this.disposed || !this.acceptingStarts || request !== this.beginRequest
+            || !isValid(this, true) || !isValid(audio, true) || this.audioManager !== audio) return false;
+        const audioNow = audio.getAudioCurrentTime();
         console.log('[ChallengeDebug] session.begin ' + JSON.stringify({
             levelId: level.id,
             ready,
@@ -55,16 +66,16 @@ export class ChallengeSession extends Component {
             return false;
         }
 
-        this.stop();
         this.clockOriginMs = ChallengeSession.monotonicNowMs();
         this.level = level;
         this.resultCallback = onResult ?? null;
         this.judgeCallback = onJudge ?? null;
+        this.followMode = followMode;
         const beatSec = 60 / level.bpm;
         // 三拍预备：给第一次玩的用户看清落键方向，由 AudioContext 时间决定。
-        this.audioManager.scheduleMetronomeTick(audioNow + 0.04, true);
-        this.audioManager.scheduleMetronomeTick(audioNow + 0.04 + beatSec, false);
-        this.audioManager.scheduleMetronomeTick(audioNow + 0.04 + beatSec * 2, false);
+        audio.scheduleMetronomeTick(audioNow + 0.04, true);
+        audio.scheduleMetronomeTick(audioNow + 0.04 + beatSec, false);
+        audio.scheduleMetronomeTick(audioNow + 0.04 + beatSec * 2, false);
         // 判定与画面使用独立单调时钟，避开部分预览/小游戏环境中
         // WebAudioContext.currentTime 会瞬间返回 NaN 的兼容问题。
         this.startedAtSec = 0.04 + beatSec * 3;
@@ -92,6 +103,10 @@ export class ChallengeSession extends Component {
             return;
         }
         if (now < this.startedAtSec) return;
+        if (this.followMode) {
+            if (this.isFollowTimelineFinished(now)) this.finish();
+            return;
+        }
         this.emit(this.judge.advance(now));
         if (this.judge.isFinished(now)) this.finish();
     }
@@ -105,7 +120,7 @@ export class ChallengeSession extends Component {
     }
 
     getExpectedKeyIndex(): number | null {
-        if (!this.active || !this.judge) return null;
+        if (!this.active || !this.judge || this.followMode) return null;
         return this.judge.getNextExpectedKeyIndex();
     }
 
@@ -119,12 +134,16 @@ export class ChallengeSession extends Component {
     }
 
     stop(): void {
+        this.beginRequest++;
         this.active = false;
         this.paused = false;
         this.pausedAtSec = 0;
         this.clockOriginMs = 0;
+        this.followMode = false;
         this.level = null;
         this.judge = null;
+        this.resultCallback = null;
+        this.judgeCallback = null;
     }
 
     pause(): boolean {
@@ -150,6 +169,8 @@ export class ChallengeSession extends Component {
 
     private onUserKey = (keyIndex: number) => {
         if (!this.active || this.paused || !this.judge || !this.audioManager) return;
+        // 跟弹模式只提供滚动谱面；用户仍正常发声，但不产生任何判定和成绩。
+        if (this.followMode) return;
         const now = this.getCurrentTimeSec();
         if (now === null || !Number.isFinite(now) || now < this.startedAtSec) return;
         this.emit(this.judge.input(keyIndex, now));
@@ -170,13 +191,27 @@ export class ChallengeSession extends Component {
         this.resultCallback?.(result);
     }
 
+    private isFollowTimelineFinished(nowSec: number): boolean {
+        if (!this.level) return true;
+        const beatSec = 60 / this.level.bpm;
+        const lastBeat = this.level.notes[this.level.notes.length - 1]?.beat ?? 0;
+        return nowSec - this.startedAtSec >= (lastBeat + 1) * beatSec;
+    }
+
     private static monotonicNowMs(): number {
         const perf = (globalThis as unknown as { performance?: { now?: () => number } }).performance;
         const value = perf?.now?.();
         return Number.isFinite(value) ? value! : Date.now();
     }
 
+    onEnable() { if (!this.disposed) this.acceptingStarts = true; }
+
+    onDisable() { this.acceptingStarts = false; this.stop(); }
+
     onDestroy() {
+        this.disposed = true;
+        this.onDisable();
         KalimbaKey.removePlayListener(this.onUserKey);
+        this.audioManager = null;
     }
 }

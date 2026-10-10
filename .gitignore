@@ -22,3 +22,14 @@ node_modules/
 # WebStorm
 #//////////////////////////
 .idea/
+
+# Local build, debugging and document-rendering output
+/build-codex/
+/output/
+/tmp/
+/.cloudbase/
+/project.private.config.json
+/exec-*.png
+/*.scene.backup
+__pycache__/
+*.pyc

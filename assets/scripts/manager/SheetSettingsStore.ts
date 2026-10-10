@@ -3,7 +3,7 @@ import { sys } from 'cc';
 const KEY = 'kalinba_sheet_settings_v1';
 
 export interface SheetSettingsSnapshot {
-    /** 0 横向 1 纵向；长图仍会强制纵向，见 SheetMusicBackground */
+    /** 0 横向分页 1 纵向滚动；单张长图会按该偏好分页或连续滚动 */
     pageTurnMode: number;
     /** 自动滚动速度 1~100，默认 50 */
     autoScrollSpeed: number;

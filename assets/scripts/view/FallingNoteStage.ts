@@ -19,6 +19,7 @@ type StageActions = {
     onTogglePause: () => void;
     onHelp: () => void;
     onToggleRhythm: () => void;
+    onToggleFollow: () => void;
 };
 
 const TUTORIAL_KEY = 'kalinba_challenge_tutorial_seen_v1';
@@ -42,11 +43,13 @@ export class FallingNoteStage extends Component {
     private modal: Node | null = null;
     private pauseLabel: Label | null = null;
     private rhythmLabel: Label | null = null;
+    private followLabel: Label | null = null;
     private level: LevelDefinition | null = null;
     private startedAtSec = 0;
     private audioNow: (() => number | null) | null = null;
     private running = false;
     private paused = false;
+    private followMode = false;
     private score = 0;
     private debugLastTimelineBucket = Number.MIN_SAFE_INTEGER;
     private debugDidDrawNote = false;
@@ -62,7 +65,7 @@ export class FallingNoteStage extends Component {
         this.audioNow = getNow;
     }
 
-    prepareLevel(level: LevelDefinition, actions: StageActions) {
+    prepareLevel(level: LevelDefinition, actions: StageActions, followMode = false) {
         this.ensureRoot();
         this.clearNotes();
         this.level = level;
@@ -70,6 +73,7 @@ export class FallingNoteStage extends Component {
         this.theme = FallingNoteStage.themeFor(level.visualTheme);
         this.running = false;
         this.paused = false;
+        this.followMode = followMode;
         this.score = 0;
         this.consumedNoteIndices.clear();
         this.consumeEffects = [];
@@ -85,9 +89,7 @@ export class FallingNoteStage extends Component {
             this.root.active = true;
             this.root.setSiblingIndex(this.node.children.length - 1);
         }
-        if (this.scoreLabel) this.scoreLabel.string = '0 分';
-        if (this.comboLabel) this.comboLabel.string = 'COMBO 0';
-        if (this.feedbackLabel) this.feedbackLabel.string = `${level.title} · ${level.bpm} BPM`;
+        this.refreshModeLabels();
         if (this.pauseLabel) this.pauseLabel.string = '暂停';
         this.setRhythmEnabled(false);
         this.redrawStage();
@@ -95,7 +97,7 @@ export class FallingNoteStage extends Component {
         this.showIntro();
     }
 
-    startLevel(level: LevelDefinition, startedAtSec: number) {
+    startLevel(level: LevelDefinition, startedAtSec: number, followMode = false) {
         this.ensureRoot();
         this.clearNotes();
         this.level = level;
@@ -106,15 +108,14 @@ export class FallingNoteStage extends Component {
         this.consumeEffects = [];
         this.running = true;
         this.paused = false;
+        this.followMode = followMode;
         this.modal?.destroy();
         this.modal = null;
         if (this.root) {
             this.root.active = true;
             this.root.setSiblingIndex(this.node.children.length - 1);
         }
-        if (this.scoreLabel) this.scoreLabel.string = '0 分';
-        if (this.comboLabel) this.comboLabel.string = 'COMBO 0';
-        if (this.feedbackLabel) this.feedbackLabel.string = '准备 3';
+        this.refreshModeLabels(true);
         if (this.pauseLabel) this.pauseLabel.string = '暂停';
         this.redrawStage();
         this.drawProgress(0);
@@ -153,6 +154,11 @@ export class FallingNoteStage extends Component {
         if (this.rhythmLabel) this.rhythmLabel.string = paused ? '节奏 暂停' : enabled ? '节奏 开' : '节奏 关';
     }
 
+    setFollowMode(enabled: boolean) {
+        this.followMode = enabled;
+        this.refreshModeLabels();
+    }
+
     showHelp(onClose: () => void) {
         this.showTutorialModal(false, onClose);
     }
@@ -181,6 +187,24 @@ export class FallingNoteStage extends Component {
         this.clearNotes();
         // 结算面板由 PracticeOverlay 展示，舞台让位避免挡住结果按钮。
         if (this.root) this.root.active = false;
+    }
+
+    finishFollow(onAgain: () => void, onExit: () => void) {
+        this.running = false;
+        this.paused = false;
+        this.clearNotes();
+        if (!this.root) return;
+        this.modal?.destroy();
+        const width = 560;
+        const height = 250;
+        const modal = this.makeShape(this.root, 'FollowCompleteModal', width, height, new Color(255, 246, 218, 252), 24, this.theme.border, 3);
+        modal.setSiblingIndex(this.root.children.length - 1);
+        modal.addComponent(BlockInputEvents);
+        this.modal = modal;
+        this.makeText(modal, 'ModalTitle', 0, 72, 29, this.theme.text, width - 60).string = '跟弹完成';
+        this.makeText(modal, 'ModalBody', 0, 20, 18, new Color(112, 81, 48, 255), width - 70).string = '没有评分，也不会记录失败。\n可以放松练习，熟悉后再切回挑战模式。';
+        this.makeActionButton(modal, '退出', 190, 52, -108, -78, onExit);
+        this.makeActionButton(modal, '再跟一遍', 190, 52, 108, -78, onAgain);
     }
 
     onJudge(event: JudgeEvent, totalScore: number) {
@@ -245,7 +269,9 @@ export class FallingNoteStage extends Component {
 
         if (elapsed < 0) {
             const count = Math.max(1, Math.min(3, Math.ceil(-elapsed / beatSec)));
-            if (this.feedbackLabel) this.feedbackLabel.string = `准备 ${count}`;
+            if (this.feedbackLabel) this.feedbackLabel.string = this.followMode ? `跟弹准备 ${count}` : `准备 ${count}`;
+        } else if (this.followMode && this.feedbackLabel) {
+            this.feedbackLabel.string = '横杠到达亮线时自由跟弹';
         }
 
         const lastBeat = this.level.notes[this.level.notes.length - 1]?.beat ?? 0;
@@ -408,6 +434,7 @@ export class FallingNoteStage extends Component {
         this.makeControlButton(root, 'HelpButton', '教程', this.stageWidth / 2 - 132, headerY, 74, () => this.actions?.onHelp());
         this.pauseLabel = this.makeControlButton(root, 'PauseButton', '暂停', this.stageWidth / 2 - 216, headerY, 74, () => this.actions?.onTogglePause());
         this.rhythmLabel = this.makeControlButton(root, 'RhythmButton', '节奏 关', this.stageWidth / 2 - 312, headerY, 106, () => this.actions?.onToggleRhythm());
+        this.followLabel = this.makeControlButton(root, 'FollowButton', '模式 挑战', 158, headerY, 104, () => this.actions?.onToggleFollow());
 
         const progress = new Node('Progress');
         progress.setParent(root);
@@ -448,8 +475,8 @@ export class FallingNoteStage extends Component {
         const durationSec = Math.ceil(lastBeat * 60 / this.level.bpm);
         this.showMessageModal(
             `《${this.level.title}》`,
-            `${this.level.subtitle}\n${this.level.bpm} BPM · 约 ${durationSec} 秒 · ${this.level.notes.length} 个音符\n\n横杠落到判定线时，点击对应轨道的琴键`,
-            '开始挑战',
+            `${this.level.subtitle}\n${this.level.bpm} BPM · 约 ${durationSec} 秒 · ${this.level.notes.length} 个音符\n\n${this.followMode ? '跟弹模式不评分：看横杠自由练习' : '横杠落到判定线时，点击对应轨道的琴键'}`,
+            this.followMode ? '开始跟弹' : '开始挑战',
             () => this.actions?.onStart(),
             true,
         );
@@ -485,8 +512,13 @@ export class FallingNoteStage extends Component {
         this.makeText(demoLane, 'HitHint', 105, -22, 17, this.theme.text, 250).string = '到这里时弹奏';
 
         this.makeText(modal, 'Hint', 0, -70, 16, new Color(126, 96, 59, 255), 650).string =
-            '越贴近判定线越准：PERFECT / GOOD / BAD / MISS；右上可开启节奏提示';
-        this.makeActionButton(modal, startMode ? '我懂了，开始' : '继续挑战', 230, 54, 0, -115, () => {
+            this.followMode
+                ? '跟弹模式没有 PERFECT / GOOD / BAD / MISS，也不会影响成绩'
+                : '越贴近判定线越准：PERFECT / GOOD / BAD / MISS；右上可开启节奏提示';
+        const actionText = startMode
+            ? (this.followMode ? '我懂了，开始跟弹' : '我懂了，开始')
+            : (this.followMode ? '继续跟弹' : '继续挑战');
+        this.makeActionButton(modal, actionText, 230, 54, 0, -115, () => {
             if (startMode) {
                 try {
                     sys.localStorage.setItem(TUTORIAL_KEY, '1');
@@ -537,8 +569,23 @@ export class FallingNoteStage extends Component {
     }
 
     private clearNotes() {
-        if (this.laneGraphics) this.drawLanes(this.laneGraphics);
-        this.feedbackEffectGraphics?.clear();
+        // 微信真机场景销毁时组件会先失效、随后 GameScene/FallingNoteStage 都收到 onDestroy。
+        // 此阶段继续给 Graphics 写 Color 会触发 EngineError 5000 并中断场景切换。
+        if (this.laneGraphics?.isValid && this.laneGraphics.node?.isValid) this.drawLanes(this.laneGraphics);
+        if (this.feedbackEffectGraphics?.isValid && this.feedbackEffectGraphics.node?.isValid) {
+            this.feedbackEffectGraphics.clear();
+        }
+    }
+
+    private refreshModeLabels(countIn = false) {
+        if (this.followLabel) this.followLabel.string = this.followMode ? '模式 跟弹' : '模式 挑战';
+        if (this.scoreLabel) this.scoreLabel.string = this.followMode ? '自由跟弹' : '0 分';
+        if (this.comboLabel) this.comboLabel.string = this.followMode ? '' : 'COMBO 0';
+        if (this.feedbackLabel) {
+            this.feedbackLabel.string = countIn
+                ? (this.followMode ? '跟弹准备 3' : '准备 3')
+                : (this.followMode ? '只看落键提示，不评分' : `${this.level?.title ?? ''} · ${this.level?.bpm ?? 0} BPM`);
+        }
     }
 
     private redrawStage() {
@@ -581,6 +628,7 @@ export class FallingNoteStage extends Component {
     }
 
     private drawLanes(graphics: Graphics) {
+        if (!graphics.isValid || !graphics.node?.isValid || !this.node.isValid) return;
         graphics.clear();
         const laneW = this.laneWidth / 17;
         // 半透明命中带把判定区域从一根抽象细线变成明确目标，但保持足够窄。
@@ -685,9 +733,16 @@ export class FallingNoteStage extends Component {
     }
 
     onDestroy() {
-        this.clearNotes();
-        this.root?.destroy();
+        this.running = false;
+        this.paused = false;
+        this.actions = null;
+        // 节点树已由 Cocos 统一销毁；这里不再重画或二次 destroy 子节点。
         this.root = null;
+        this.laneGraphics = null;
+        this.progressGraphics = null;
+        this.feedbackEffectGraphics = null;
+        this.noteLayer = null;
+        this.modal = null;
     }
 
     private static monotonicNowMs(): number {
