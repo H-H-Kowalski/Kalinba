@@ -9,6 +9,7 @@ import { LevelProgressStore } from '../manager/LevelProgressStore';
 import { LevelSelectOverlay } from './LevelSelectOverlay';
 import { showAchievementOverlay } from './AchievementOverlay';
 import { ProceduralMenuBgm } from '../manager/ProceduralMenuBgm';
+import { installPerformanceShareMenu } from '../manager/PerformanceShareMenu';
 const { ccclass, property } = _decorator;
 
 /** 挂在 mainscene 的 Canvas 上；开始按钮可拖入 startBtn，或留空由节点名 start_button 自动绑定 */
@@ -46,6 +47,7 @@ export class HomeScene extends Component {
 
     onLoad() {
         installShareLaunchCapture();
+        installPerformanceShareMenu();
         this.unsubscribePendingGameLaunch = onPendingGameLaunch(() => this.routePendingGameLaunch());
         this.bindStartButtonIfNeeded();
         this.bindChallengeButtonIfNeeded();

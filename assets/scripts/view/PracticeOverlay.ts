@@ -9,6 +9,7 @@ const FREE_TUTORIAL_KEY = 'kalinba_free_play_tutorial_seen_v1';
 type RecordingResultActions = {
     onPreview: Action;
     onShare: Action;
+    onShareTimeline: Action;
     onRerecord: Action;
     onClose: Action;
 };
@@ -266,15 +267,19 @@ export class PracticeOverlay extends Component {
         this.makePanelLabel(summaryCard, 'NotesTitle', '演奏音符', 125, 22, 190, 30, 16, new Color(141, 106, 69, 255));
         this.makePanelLabel(summaryCard, 'NotesValue', `${noteCount} 个`, 125, -16, 190, 42, 27, new Color(106, 61, 33, 255));
 
-        const preview = this.makePanelButton(panel, 'PreviewRecord', '试听', -200, -112, new Color(105, 84, 59, 255), new Color(255, 246, 220, 255), actions.onPreview);
+        const preview = this.makePanelButton(panel, 'PreviewRecord', '试听', -120, -80, new Color(105, 84, 59, 255), new Color(255, 246, 220, 255), actions.onPreview);
         this.recordingPreviewLabel = preview.label;
-        this.makePanelButton(panel, 'Rerecord', '重新录制', 0, -112, new Color(184, 103, 47, 255), new Color(255, 246, 220, 255), () => {
+        this.makePanelButton(panel, 'Rerecord', '重新录制', 120, -80, new Color(184, 103, 47, 255), new Color(255, 246, 220, 255), () => {
             this.hideRecordingFlow();
             actions.onRerecord();
         });
-        this.makePanelButton(panel, 'ShareRecord', '分享给好友', 200, -112, new Color(87, 139, 72, 255), new Color(255, 250, 224, 255), () => {
+        this.makePanelButton(panel, 'ShareRecord', '分享给好友', -120, -144, new Color(87, 139, 72, 255), new Color(255, 250, 224, 255), () => {
             this.hideRecordingFlow();
             actions.onShare();
+        });
+        this.makePanelButton(panel, 'ShareTimeline', '分享到朋友圈', 120, -144, new Color(87, 139, 72, 255), new Color(255, 250, 224, 255), () => {
+            this.hideRecordingFlow();
+            actions.onShareTimeline();
         });
     }
 

@@ -27,6 +27,8 @@ import { FallingNoteStage } from './FallingNoteStage';
 import { getAchievementById, resolveAchievementIds, type AchievementDefinition } from '../gameplay/AchievementCatalog';
 import { EditableCaption } from './EditableCaption';
 import { ProceduralMenuBgm } from '../manager/ProceduralMenuBgm';
+import { installPerformanceShareMenu, isTimelineShareAvailable, setPreparedPerformanceShare,
+    clearPreparedPerformanceShare, setReceivedPerformanceShare, showTimelineShareGuide } from '../manager/PerformanceShareMenu';
 const { ccclass, property } = _decorator;
 
 /**
@@ -139,6 +141,7 @@ export class GameScene extends Component {
         // 自由演奏与挑战演奏共用 playscene；两种模式均禁止菜单 BGM 混入。
         ProceduralMenuBgm.stop(true);
         installShareLaunchCapture();
+        installPerformanceShareMenu();
         game.on(Game.EVENT_HIDE, this.onGameHide, this);
         if (!this.sheetMusicBackground) {
             this.sheetMusicBackground =
@@ -1264,6 +1267,7 @@ export class GameScene extends Component {
         this.practiceOverlay?.setRecordingPreviewing(false);
         this.setPlaybackLock(false);
         this.lastRecord = null;
+        clearPreparedPerformanceShare();
         this.canShareRecordedResult = false;
         console.log(`[AutoScroll] onToggleRecordClick: sheetMusicBackground=${!!this.sheetMusicBackground}`);
         this.sheetMusicBackground?.alignForRecordingStart();
@@ -1305,6 +1309,10 @@ export class GameScene extends Component {
                 onShare: () => {
                     this.stopRecordingPreview();
                     void this.onShareRecordClick();
+                },
+                onShareTimeline: () => {
+                    this.stopRecordingPreview();
+                    void this.onShareRecordClick('timeline');
                 },
                 onRerecord: () => {
                     this.stopRecordingPreview();
@@ -1373,7 +1381,7 @@ export class GameScene extends Component {
         }
     }
 
-    private async onShareRecordClick() {
+    private async onShareRecordClick(target: 'friend' | 'timeline' = 'friend') {
         if (!this.isSceneCurrent() || this.shareBusy) return;
         const rec = this.lastRecord;
         if (!rec || !this.canShareRecordedResult) {
@@ -1382,6 +1390,10 @@ export class GameScene extends Component {
         }
         if (rec.durationMs > PERFORMANCE_MAX_DURATION_MS) {
             showToast(this.node, '录制超过 3 分钟上限', 1.6);
+            return;
+        }
+        if (target === 'timeline' && !isTimelineShareAvailable()) {
+            showToast(this.node, '当前微信暂不支持朋友圈分享，可先分享给好友', 2.5);
             return;
         }
         const caption = rec.title === undefined ? this.getCurrentCaptionForToast() : rec.title.trim();
@@ -1402,19 +1414,22 @@ export class GameScene extends Component {
             const wxApi = getWx() as {
                 shareAppMessage?: (arg: { title?: string; query?: string; imageUrl?: string }) => void;
             } | undefined;
-            if (wxApi?.shareAppMessage) {
+            if (wxApi?.shareAppMessage || target === 'timeline') {
                 const imageUrl = await this.createPerformanceShareImage(caption, customMessage);
                 // Never fall back to an automatic screenshot that may contain an input draft.
                 if (!imageUrl) throw new Error('分享图片生成失败，请稍后重试');
                 if (!isCurrent()) return;
                 const rid = await PerformanceCloudService.createRecord(recordToShare);
                 if (!isCurrent()) return;
-                wxApi.shareAppMessage({
-                    title,
-                    query: `rid=${encodeURIComponent(rid)}`,
-                    imageUrl,
-                });
-                showToast(this.node, '已拉起微信分享', 1.4);
+                setPreparedPerformanceShare({ title, recordId: rid, imageUrl });
+                if (target === 'timeline') {
+                    const ready = showTimelineShareGuide();
+                    showToast(this.node, ready ? '右上角「…」→「分享到朋友圈」'
+                        : '当前微信暂不支持朋友圈分享，可先分享给好友', 3);
+                } else {
+                    wxApi!.shareAppMessage!({ title, query: `rid=${encodeURIComponent(rid)}`, imageUrl });
+                    showToast(this.node, '已拉起微信分享', 1.4);
+                }
             } else {
                 showToast(this.node, '暂时不可分享，请稍后重试', 2.0);
             }
@@ -1478,6 +1493,7 @@ export class GameScene extends Component {
         this.challengeRequest++; this.rhythmRequest++; this.metronomeRequest++; this.progressRequest++;
         this.closeSharedFeedback?.();
         this.cancelPendingShare();
+        clearPreparedPerformanceShare();
         // 再做一次幂等硬停止：即使分享参数在场景启动后才到达，也不允许菜单音混入回放。
         ProceduralMenuBgm.stop(true);
         this.sharedPlaybackLaunch = true;
@@ -1518,6 +1534,7 @@ export class GameScene extends Component {
             console.log('[ShareLaunch] shared performance loaded', { eventCount: rec.events.length, durationMs: rec.durationMs, stylePreset: rec.stylePreset });
             this.lastRecord = rec;
             this.canShareRecordedResult = false;
+            setReceivedPerformanceShare(rid);
             if (!isValid(this.audioManager, true)) this.audioManager = AudioManager.getInstance();
             if (!this.audioManager) throw new Error('音频未就绪，请重试');
             this.audioManager.setSynthStylePreset(rec.stylePreset);
