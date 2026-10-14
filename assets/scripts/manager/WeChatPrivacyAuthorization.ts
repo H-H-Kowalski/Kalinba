@@ -14,8 +14,9 @@ type Request = { receive: (resolve: ResolvePrivacy) => void };
 let registeredApi: PrivacyApi | undefined;
 let active: Request | undefined;
 
-/** 只在用户发起选图后请求授权；取消函数用于选图超时，不能遗留可点击的授权弹窗。 */
-export function requestImagePrivacyAuthorization(success: () => void, fail: (error: unknown) => void): () => void {
+/** 只在用户发起选图或保存图片后请求授权；取消时不能遗留可点击的授权弹窗。 */
+export function requestImagePrivacyAuthorization(success: () => void, fail: (error: unknown) => void,
+    purpose: 'choose' | 'save' = 'choose'): () => void {
     const api = getWx() as PrivacyApi | undefined;
     if (!api?.requirePrivacyAuthorize) {
         success(); // 老基础库由选图接口执行平台权限检查。
@@ -93,7 +94,7 @@ export function requestImagePrivacyAuthorization(success: () => void, fail: (err
                                 // 只能等待微信 requirePrivacyAuthorize 的 success，不能自行打开相册。
                             },
                             disagree: () => finish(false, new Error('用户未同意隐私授权')),
-                        });
+                        }, purpose);
                         if (finished) closeDialog();
                     } catch (error) { finish(false, error); }
                 },

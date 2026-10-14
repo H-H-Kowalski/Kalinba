@@ -4,7 +4,7 @@ import { getWx } from '../manager/WeChatNative';
 type ConsentActions = { exposed: () => void; agree: () => void; disagree: () => void };
 
 /** 小游戏自定义隐私告知。仅真实点击“同意并继续”才上报 agree。 */
-export function showPrivacyConsentDialog(contractName: string, actions: ConsentActions): () => void {
+export function showPrivacyConsentDialog(contractName: string, actions: ConsentActions, purpose: 'choose' | 'save' = 'choose'): () => void {
     const canvas = director.getScene()?.getChildByName('Canvas');
     const size = canvas?.getComponent(UITransform);
     if (!canvas || !size) throw new Error('隐私弹窗暂时不可用');
@@ -69,8 +69,10 @@ export function showPrivacyConsentDialog(contractName: string, actions: ConsentA
             n.on(Button.EventType.CLICK, () => { if (!closed) onClick(); });
             return b;
         };
-        label('Title', '选图隐私保护提示', height * 0.37, 44, 28);
-        label('Purpose', '为替换曲谱，需要访问你选择的相册或相机图片。\n所选图片将上传至微信云服务进行内容安全检测。\n不同意也可以继续使用弹奏等其他功能。', height * 0.12, height * 0.3, 21);
+        label('Title', purpose === 'save' ? '保存图片隐私保护提示' : '选图隐私保护提示', height * 0.37, 44, 28);
+        label('Purpose', purpose === 'save'
+            ? '为保存演奏分享图片，需要使用相册的写入权限。\n仅将生成的分享图片保存到相册，不读取相册中的其他图片。\n不同意也可以继续使用弹奏等其他功能。'
+            : '为替换曲谱，需要访问你选择的相册或相机图片。\n所选图片将上传至微信云服务进行内容安全检测。\n不同意也可以继续使用弹奏等其他功能。', height * 0.12, height * 0.3, 21);
         label('ContractName', contractName, -height * 0.10, 38, 20);
         const notice = label('Notice', '请阅读隐私指引后决定是否同意。', -height * 0.305, 22, 17);
         let agreeButton: Button;

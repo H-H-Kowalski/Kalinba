@@ -1,8 +1,11 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
-const {compileForWechat} = require('./verify-release-compat.cjs');
+const {compileForWechat,loadBuilt} = require('./verify-release-compat.cjs');
 const noop = () => {};
 function load(file, imports, extras = {}) {
+    if (process.argv.includes('--check-build')) return loadBuilt(file, id=>id==='cc'
+        ? {...imports(id),cclegacy:{_RF:{push:noop,pop:noop}}} : imports(id),
+        {console:{log:noop,warn:noop},...extras});
     const exports = {};
     vm.runInNewContext(compileForWechat(file), {exports, require: imports, console: {log:noop,warn:noop}, ...extras});
     return exports;
@@ -87,6 +90,11 @@ function dialogCases() {
     assert.equal(disagree,0,'programmatic close does not impersonate refusal');
     view.showPrivacyConsentDialog('《隐私保护指引》',{exposed:noop,agree:noop,disagree:()=>disagree++});
     canvas.children[1].destroy(); assert.equal(disagree,1,'scene destruction cancels pending authorization');
+    close=view.showPrivacyConsentDialog('《隐私保护指引》',{exposed:noop,agree:noop,disagree:noop},'save');
+    const savePanel=canvas.children[2].children[0];
+    const purpose=savePanel.children.find(n=>n.name==='Purpose').getComponent(Label).string;
+    assert.match(purpose,/写入权限/);assert.match(purpose,/不读取相册中的其他图片/);
+    assert.equal(purpose.includes('上传'),false,'saving cannot reuse the picture selection/upload consent description');close();
     console.log('PASS privacy dialog: policy link, blocked/failed reads, actual consent button and scene destruction');
 }
 module.exports = async () => {privacyCases();dialogCases();};

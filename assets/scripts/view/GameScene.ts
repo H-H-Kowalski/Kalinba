@@ -15,6 +15,7 @@ import { PERFORMANCE_MAX_DURATION_MS, type PerformanceRecord } from '../manager/
 import { AchievementCloudService } from '../manager/AchievementCloudService';
 import { installShareLaunchCapture, onPendingGameLaunch, takePendingSharedRecordId } from '../manager/PerformanceShareLaunch';
 import { getWx } from '../manager/WeChatNative';
+import { ImageExportError, loadShareCodeImage, saveShareImageToAlbum } from '../manager/PerformanceImageExport';
 import { LevelProgressStore } from '../manager/LevelProgressStore';
 import { ChallengeLaunchStore } from '../manager/ChallengeLaunchStore';
 import { MetronomeController } from '../manager/MetronomeController';
@@ -106,6 +107,8 @@ export class GameScene extends Component {
     private sharedPlaybackRequest = 0;
     private closeSharedFeedback: (() => void) | null = null;
     private closeShareLoading: (() => void) | null = null;
+    private cancelImageExport: (() => void) | null = null;
+    private imageExportRecord: { source: PerformanceRecord; caption: string; recordId: string } | null = null;
     private playbackInputBlocker: BlockInputEvents | null = null;
     private lastChallengeLevelId = 'c1-01';
     private activeChallengeLevelId: string | null = null;
@@ -1080,7 +1083,7 @@ export class GameScene extends Component {
         return '送你一首歌';
     }
 
-    private promptPerformanceShareMessage(caption: string): Promise<string | null> {
+    private promptPerformanceShareMessage(caption: string, savingImage = false): Promise<string | null> {
         const wxApi = getWx() as {
             showModal?: (arg: {
                 title?: string;
@@ -1110,7 +1113,7 @@ export class GameScene extends Component {
                     content: defaultMessage,
                     editable: true,
                     placeholderText: defaultMessage,
-                    confirmText: '去分享',
+                    confirmText: savingImage ? '生成图片' : '去分享',
                     cancelText: '取消',
                     success: (res) => {
                         if (!res?.confirm) {
@@ -1128,8 +1131,8 @@ export class GameScene extends Component {
         });
     }
 
-    /** 生成微信分享专用 5:4 卡片；失败时返回空值，调用方必须停止分享。 */
-    private createPerformanceShareImage(caption: string, customMessage: string): Promise<string | undefined> {
+    /** 微信卡片为 5:4，带小游戏码的相册图片为 3:4；失败必须停止分享。 */
+    private async createPerformanceShareImage(caption: string, customMessage: string, codeBase64?: string): Promise<string | undefined> {
         const wxApi = getWx() as {
             createCanvas?: () => {
                 width: number;
@@ -1145,7 +1148,8 @@ export class GameScene extends Component {
             };
         } | undefined;
         if (!wxApi?.createCanvas) return Promise.resolve(undefined);
-        return new Promise((resolve) => {
+        const code = codeBase64 ? await loadShareCodeImage(codeBase64) : undefined;
+        try { return await new Promise<string | undefined>((resolve) => {
             let settled = false;
             const finish = (value?: string) => {
                 if (settled) return;
@@ -1157,7 +1161,7 @@ export class GameScene extends Component {
             try {
                 const canvas = wxApi.createCanvas!();
                 canvas.width = 600;
-                canvas.height = 480;
+                canvas.height = code ? 800 : 480;
                 const ctx = canvas.getContext('2d');
                 if (!ctx || !canvas.toTempFilePath) {
                     finish();
@@ -1181,9 +1185,9 @@ export class GameScene extends Component {
                 const message = customMessage.trim().slice(0, 20) || this.buildDefaultShareMessage(caption);
 
                 ctx.fillStyle = '#F5EEDC';
-                ctx.fillRect(0, 0, 600, 480);
+                ctx.fillRect(0, 0, 600, canvas.height);
                 ctx.fillStyle = '#E9DDBF';
-                ctx.fillRect(0, 0, 18, 480);
+                ctx.fillRect(0, 0, 18, canvas.height);
                 ctx.fillStyle = '#6D452C';
                 ctx.font = '20px sans-serif';
                 ctx.textAlign = 'left';
@@ -1224,9 +1228,21 @@ export class GameScene extends Component {
                     ctx.lineTo(x, 300 + length);
                     ctx.stroke();
                 }
+                if (code) {
+                    // 保留白色码底和充足边距，禁止在码上覆盖图形或用户文案。
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(174, 488, 252, 252);
+                    ctx.drawImage(code.image, 185, 499, 230, 230);
+                    ctx.textAlign = 'center';
+                    ctx.fillStyle = '#6D452C';
+                    ctx.font = '22px sans-serif';
+                    ctx.fillText('微信扫码听演奏', 300, 757);
+                    ctx.font = '16px sans-serif';
+                    ctx.fillText('演奏保留90天', 300, 785);
+                }
                 canvas.toTempFilePath({
-                    x: 0, y: 0, width: 600, height: 480,
-                    destWidth: 600, destHeight: 480,
+                    x: 0, y: 0, width: 600, height: canvas.height,
+                    destWidth: 600, destHeight: canvas.height,
                     fileType: 'jpg', quality: 0.92,
                     success: (res) => finish(typeof res?.tempFilePath === 'string' ? res.tempFilePath : undefined),
                     fail: () => finish(),
@@ -1235,7 +1251,7 @@ export class GameScene extends Component {
                 console.warn('[ShareCard] create image failed', e);
                 finish();
             }
-        });
+        }); } finally { code?.dispose(); }
     }
 
     private onToggleRecordClick() {
@@ -1267,6 +1283,7 @@ export class GameScene extends Component {
         this.practiceOverlay?.setRecordingPreviewing(false);
         this.setPlaybackLock(false);
         this.lastRecord = null;
+        this.imageExportRecord = null;
         clearPreparedPerformanceShare();
         this.canShareRecordedResult = false;
         console.log(`[AutoScroll] onToggleRecordClick: sheetMusicBackground=${!!this.sheetMusicBackground}`);
@@ -1313,6 +1330,10 @@ export class GameScene extends Component {
                 onShareTimeline: () => {
                     this.stopRecordingPreview();
                     void this.onShareRecordClick('timeline');
+                },
+                onSaveImage: () => {
+                    this.stopRecordingPreview();
+                    void this.onShareRecordClick('image');
                 },
                 onRerecord: () => {
                     this.stopRecordingPreview();
@@ -1381,7 +1402,7 @@ export class GameScene extends Component {
         }
     }
 
-    private async onShareRecordClick(target: 'friend' | 'timeline' = 'friend') {
+    private async onShareRecordClick(target: 'friend' | 'timeline' | 'image' = 'friend') {
         if (!this.isSceneCurrent() || this.shareBusy) return;
         const rec = this.lastRecord;
         if (!rec || !this.canShareRecordedResult) {
@@ -1402,15 +1423,35 @@ export class GameScene extends Component {
         const isCurrent = () => this.isSceneCurrent() && request === this.shareRequest &&
             this.lastRecord === rec && this.canShareRecordedResult;
         try {
-            const customMessage = await this.promptPerformanceShareMessage(caption);
+            const customMessage = await this.promptPerformanceShareMessage(caption, target === 'image');
             if (customMessage === null || !isCurrent()) return;
             const title = this.buildPerformanceShareTitle(caption, customMessage);
-            this.closeShareLoading = showBusyIndicator(this.node, '正在检测分享文案并准备分享…').close;
+            const loading = showBusyIndicator(this.node, target === 'image' ? '正在检测文案并生成分享图片…' : '正在检测分享文案并准备分享…');
+            this.closeShareLoading = loading.close;
             // Include the final formatted title as well as all user text drawn on the card.
             await ContentSecurityService.requireText(`${caption}\n${customMessage}\n${title}`);
             if (!isCurrent()) return;
             // 兼容修改前生成但尚未分享的旧记录：分享时补上当前歌曲名/祝福语。
             const recordToShare: PerformanceRecord = { ...rec, title: caption };
+            if (target === 'image') {
+                const cached = this.imageExportRecord;
+                const rid = cached?.source === rec && cached.caption === caption ? cached.recordId
+                    : await PerformanceCloudService.createRecord(recordToShare);
+                if (!isCurrent()) return;
+                // 保存失败后重试复用这段演奏，不能重复上传消耗创建额度。
+                this.imageExportRecord = { source: rec, caption, recordId: rid };
+                const code = await PerformanceCloudService.getShareCode(rid);
+                if (!isCurrent()) return;
+                const image = await this.createPerformanceShareImage(caption, customMessage, code);
+                if (!isCurrent()) return;
+                if (!image) throw new ImageExportError('分享图片生成失败，请稍后重试');
+                loading.update('正在保存图片，请完成相册授权…');
+                const saving = saveShareImageToAlbum(image, isCurrent);
+                this.cancelImageExport = saving.cancel;
+                await saving.promise;
+                if (isCurrent()) showToast(this.node, '已保存到相册，可到小红书选择图片发布', 3);
+                return;
+            }
             const wxApi = getWx() as {
                 shareAppMessage?: (arg: { title?: string; query?: string; imageUrl?: string }) => void;
             } | undefined;
@@ -1421,6 +1462,7 @@ export class GameScene extends Component {
                 if (!isCurrent()) return;
                 const rid = await PerformanceCloudService.createRecord(recordToShare);
                 if (!isCurrent()) return;
+                this.imageExportRecord = { source: rec, caption, recordId: rid };
                 setPreparedPerformanceShare({ title, recordId: rid, imageUrl });
                 if (target === 'timeline') {
                     const ready = showTimelineShareGuide();
@@ -1435,10 +1477,13 @@ export class GameScene extends Component {
             }
         } catch (e) {
             const msg = e instanceof Error ? e.message : 'unknown error';
-            if (isCurrent()) showToast(this.node, e instanceof ContentSecurityError
-                ? (e.rejected ? e.message : '暂时不可分享，请稍后重试') : `分享失败：${msg}`, 2.0);
+            if (isCurrent() && !(e instanceof ImageExportError && e.cancelled)) showToast(this.node, e instanceof ContentSecurityError
+                ? (e.rejected ? e.message : '暂时不可分享，请稍后重试')
+                : target === 'image' ? (e instanceof ImageExportError ? e.message : '暂时无法生成分享图片，请稍后重试')
+                : `分享失败：${msg}`, target === 'image' ? 3 : 2);
         } finally {
             if (request === this.shareRequest) {
+                this.cancelImageExport = null;
                 this.closeShareLoading?.(); this.closeShareLoading = null;
                 this.shareBusy = false;
             }
@@ -1446,6 +1491,7 @@ export class GameScene extends Component {
     }
 
     private cancelPendingShare() {
+        this.cancelImageExport?.(); this.cancelImageExport = null;
         this.closeShareLoading?.(); this.closeShareLoading = null;
         this.shareRequest++;
         this.shareBusy = false;

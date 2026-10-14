@@ -10,6 +10,7 @@ type RecordingResultActions = {
     onPreview: Action;
     onShare: Action;
     onShareTimeline: Action;
+    onSaveImage: Action;
     onRerecord: Action;
     onClose: Action;
 };
@@ -257,29 +258,33 @@ export class PracticeOverlay extends Component {
         const panel = this.makeRecordingFlowBase(() => {
             actions.onClose();
             this.hideRecordingFlow();
-        });
+        }, 432);
         if (!panel) return;
-        this.makePanelLabel(panel, 'RecordResultTitle', '已有一段录制', 0, 120, 520, 46, 30, new Color(126, 62, 28, 255));
-        this.makePanelLabel(panel, 'RecordSongTitle', songTitle, 0, 78, 500, 36, 21, new Color(174, 82, 34, 255));
-        const summaryCard = this.makeCard(panel, 'RecordSummary', 500, 112, 0, 12, new Color(255, 250, 229, 255), new Color(221, 174, 98, 190), 20, 1.8);
+        this.makePanelLabel(panel, 'RecordResultTitle', '已有一段录制', 0, 156, 520, 46, 30, new Color(126, 62, 28, 255));
+        this.makePanelLabel(panel, 'RecordSongTitle', songTitle, 0, 114, 500, 36, 21, new Color(174, 82, 34, 255));
+        const summaryCard = this.makeCard(panel, 'RecordSummary', 500, 104, 0, 48, new Color(255, 250, 229, 255), new Color(221, 174, 98, 190), 20, 1.8);
         this.makePanelLabel(summaryCard, 'DurationTitle', '录制时长', -125, 22, 190, 30, 16, new Color(141, 106, 69, 255));
         this.makePanelLabel(summaryCard, 'DurationValue', `${durationSec.toFixed(1)} 秒`, -125, -16, 190, 42, 27, new Color(106, 61, 33, 255));
         this.makePanelLabel(summaryCard, 'NotesTitle', '演奏音符', 125, 22, 190, 30, 16, new Color(141, 106, 69, 255));
         this.makePanelLabel(summaryCard, 'NotesValue', `${noteCount} 个`, 125, -16, 190, 42, 27, new Color(106, 61, 33, 255));
 
-        const preview = this.makePanelButton(panel, 'PreviewRecord', '试听', -120, -80, new Color(105, 84, 59, 255), new Color(255, 246, 220, 255), actions.onPreview);
+        const preview = this.makePanelButton(panel, 'PreviewRecord', '试听', -120, -56, new Color(105, 84, 59, 255), new Color(255, 246, 220, 255), actions.onPreview);
         this.recordingPreviewLabel = preview.label;
-        this.makePanelButton(panel, 'Rerecord', '重新录制', 120, -80, new Color(184, 103, 47, 255), new Color(255, 246, 220, 255), () => {
+        this.makePanelButton(panel, 'Rerecord', '重新录制', 120, -56, new Color(184, 103, 47, 255), new Color(255, 246, 220, 255), () => {
             this.hideRecordingFlow();
             actions.onRerecord();
         });
-        this.makePanelButton(panel, 'ShareRecord', '分享给好友', -120, -144, new Color(87, 139, 72, 255), new Color(255, 250, 224, 255), () => {
+        this.makePanelButton(panel, 'ShareRecord', '分享给好友', -120, -120, new Color(87, 139, 72, 255), new Color(255, 250, 224, 255), () => {
             this.hideRecordingFlow();
             actions.onShare();
         });
-        this.makePanelButton(panel, 'ShareTimeline', '分享到朋友圈', 120, -144, new Color(87, 139, 72, 255), new Color(255, 250, 224, 255), () => {
+        this.makePanelButton(panel, 'ShareTimeline', '分享到朋友圈', 120, -120, new Color(87, 139, 72, 255), new Color(255, 250, 224, 255), () => {
             this.hideRecordingFlow();
             actions.onShareTimeline();
+        });
+        this.makePanelButton(panel, 'SaveShareImage', '保存分享图片', 0, -184, new Color(105, 84, 59, 255), new Color(255, 246, 220, 255), () => {
+            this.hideRecordingFlow();
+            actions.onSaveImage();
         });
     }
 
@@ -293,7 +298,7 @@ export class PracticeOverlay extends Component {
         this.recordingPreviewLabel = null;
     }
 
-    private makeRecordingFlowBase(onClose: Action): Node | null {
+    private makeRecordingFlowBase(onClose: Action, panelHeight = 360): Node | null {
         if (!this.root?.isValid) return null;
         this.hideRecordingFlow();
         this.root.setSiblingIndex(this.node.children.length - 1);
@@ -316,9 +321,9 @@ export class PracticeOverlay extends Component {
         mask.addComponent(Button).transition = Button.Transition.NONE;
         mask.on(Button.EventType.CLICK, onClose, this);
 
-        const panel = this.makeCard(flow, 'RecordingPanel', 640, 360, 0, 0, new Color(255, 243, 211, 255), new Color(151, 78, 34, 255), 28, 3);
+        const panel = this.makeCard(flow, 'RecordingPanel', 640, panelHeight, 0, 0, new Color(255, 243, 211, 255), new Color(151, 78, 34, 255), 28, 3);
         panel.addComponent(BlockInputEvents);
-        const close = this.makeCard(panel, 'Close', 42, 42, 278, 142, new Color(126, 62, 28, 245), new Color(235, 174, 77, 180), 18, 1.3);
+        const close = this.makeCard(panel, 'Close', 42, 42, 278, panelHeight / 2 - 38, new Color(126, 62, 28, 245), new Color(235, 174, 77, 180), 18, 1.3);
         this.makePanelLabel(close, 'Label', '×', 0, 1, 34, 34, 24, new Color(255, 246, 220, 255));
         close.addComponent(Button).transition = Button.Transition.SCALE;
         close.on(Button.EventType.CLICK, onClose, this);

@@ -137,15 +137,19 @@ function entryCases() {
 }
 function resultCardCases() {
     const Overlay=load('assets/scripts/view/PracticeOverlay.ts',id=>id==='cc'?cc:empty).PracticeOverlay;
-    const overlay=new Overlay(),buttons=[];let friend=0,timeline=0,closed=0;
-    overlay.makeRecordingFlowBase=()=>({});overlay.makeCard=()=>({});overlay.makePanelLabel=()=>({});
+    const overlay=new Overlay(),buttons=[];let friend=0,timeline=0,saved=0,closed=0,height;
+    overlay.makeRecordingFlowBase=(_,h)=>{height=h;return {};};overlay.makeCard=()=>({});overlay.makePanelLabel=()=>({});
     overlay.makePanelButton=(_,name,text,x,y,fill,color,action)=>{buttons.push({name,text,x,y,action});return {node:{},label:{}};};
     overlay.hideRecordingFlow=()=>closed++;
-    overlay.showRecordingResult('歌名',1,2,{onPreview:noop,onRerecord:noop,onClose:noop,onShare:()=>friend++,onShareTimeline:()=>timeline++});
-    assert.equal(buttons.length,4);
-    for(const button of buttons) {assert.ok(Math.abs(button.x)+95<=320);assert.ok(Math.abs(button.y)+28<=180);}
+    overlay.showRecordingResult('歌名',1,2,{onPreview:noop,onRerecord:noop,onClose:noop,onShare:()=>friend++,onShareTimeline:()=>timeline++,onSaveImage:()=>saved++});
+    assert.equal(buttons.length,5);assert.equal(height,432);
+    for(const button of buttons) {assert.ok(Math.abs(button.x)+95<=320);assert.ok(Math.abs(button.y)+28<=height/2);}
+    for(let i=0;i<buttons.length;i++)for(let j=i+1;j<buttons.length;j++) {
+        assert.ok(Math.abs(buttons[i].x-buttons[j].x)>=190 || Math.abs(buttons[i].y-buttons[j].y)>=56,'result buttons cannot overlap');
+    }
     buttons.find(button=>button.text==='分享到朋友圈').action();assert.equal(timeline,1);assert.equal(friend,0);assert.equal(closed,1);
     buttons.find(button=>button.text==='分享给好友').action();assert.equal(friend,1);
-    console.log('PASS result card: separate friend/timeline actions and four buttons fit inside the existing panel');
+    buttons.find(button=>button.text==='保存分享图片').action();assert.equal(saved,1);assert.equal(friend,1);assert.equal(timeline,1);
+    console.log('PASS result card: separate friend/timeline/image actions and five buttons fit without overlapping');
 }
 (async()=>{menuCases();await flowCases();entryCases();resultCardCases();})().catch(error=>{console.error(error);process.exitCode=1;});

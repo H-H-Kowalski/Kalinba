@@ -11,6 +11,18 @@ type GetResult = {
 };
 
 export class PerformanceCloudService {
+    static async getShareCode(recordId: string): Promise<string> {
+        if (!/^[a-zA-Z0-9_-]{1,28}$/.test(recordId)) throw new Error('演奏编号无效');
+        const result = await callWxCloudFunction<{ recordId?: string; imageBase64?: string; codeVersion?: number }>(
+            'getPerformanceShareCode', { recordId });
+        const image = result?.imageBase64;
+        if (result?.recordId !== recordId || result?.codeVersion !== 1 || typeof image !== 'string' ||
+            image.length > 350000 || !/^(iVBORw0KGgo|\/9j\/)[A-Za-z0-9+/]*={0,2}$/.test(image)) {
+            throw new Error('小游戏码生成失败，请稍后重试');
+        }
+        return image;
+    }
+
     static async createRecord(record: PerformanceRecord): Promise<string> {
         const err = PerformanceRecorder.validate(record);
         if (err) throw new Error(err);

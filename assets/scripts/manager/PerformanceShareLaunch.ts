@@ -16,7 +16,16 @@ function savePendingRecordId(recordId: string): void {
 
 function parseQueryFromOptions(options: unknown): void {
     const query = (options as { query?: Record<string, unknown> } | undefined)?.query;
-    const rid = typeof query?.rid === 'string' ? query.rid : '';
+    let codeRecordId = '';
+    if (typeof query?.scene === 'string' && query.scene.length <= 96) {
+        try {
+            const scene = decodeURIComponent(query.scene);
+            // 小游戏码的业务 scene 与 options.scene 的数字启动场景不是同一个字段。
+            const match = /^rid=([a-zA-Z0-9_-]{1,28})$/.exec(scene);
+            codeRecordId = match?.[1] ?? '';
+        } catch { /* 无效的扫码参数不能覆盖普通分享或触发播放。 */ }
+    }
+    const rid = typeof query?.rid === 'string' && query.rid ? query.rid : codeRecordId;
     let shouldEnterGame = false;
     if (rid) {
         // 好友录音优先，避免它结束后再自动跳入历史遗留挑战。
@@ -73,7 +82,7 @@ export function installShareLaunchCapture(): void {
         const enter = wxApi.getEnterOptionsSync?.() as { query?: Record<string, unknown> } | undefined;
         const query = enter?.query;
         // 只分发一次；最新进入参数优先于最初启动参数。
-        parseQueryFromOptions(query?.rid || query?.challenge || query?.achievement
+        parseQueryFromOptions(query?.rid || query?.scene || query?.challenge || query?.achievement
             ? enter : wxApi.getLaunchOptionsSync?.());
     } catch {
         // ignore
