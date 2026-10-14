@@ -2,6 +2,18 @@ import { PERFORMANCE_MAX_DURATION_MS, PERFORMANCE_MAX_ENCODED_SIZE, PERFORMANCE_
 import { PerformanceRecorder } from './PerformanceRecorder';
 import { callWxCloudFunction } from './WeChatCloudFunction';
 import { ContentSecurityError } from './ContentSecurityService';
+import { getWx } from './WeChatNative';
+
+export type ShareCodeEnvironment = 'release' | 'trial' | 'develop';
+
+/** 环境来自当前小游戏账号信息，不能把开发/体验版图片默认为已发布客户端。 */
+export function getPerformanceShareEnvironment(): ShareCodeEnvironment {
+    const api = getWx() as { getAccountInfoSync?: () => { miniProgram?: { envVersion?: unknown } } } | undefined;
+    let value: unknown;
+    try { value = api?.getAccountInfoSync?.().miniProgram?.envVersion; } catch { /* Fail closed below. */ }
+    if (value === 'release' || value === 'trial' || value === 'develop') return value;
+    throw new Error('无法确认小游戏版本，暂时不能生成扫码图片');
+}
 
 type CreateResult = PerformanceSharePayload & { securityStatus?: string; contentSecurityVersion?: number };
 
@@ -11,12 +23,13 @@ type GetResult = {
 };
 
 export class PerformanceCloudService {
-    static async getShareCode(recordId: string): Promise<string> {
+    static async getShareCode(recordId: string, envVersion: ShareCodeEnvironment = 'release'): Promise<string> {
+        if (!['release', 'trial', 'develop'].includes(envVersion)) throw new Error('小游戏版本无效');
         if (!/^[a-zA-Z0-9_-]{1,28}$/.test(recordId)) throw new Error('演奏编号无效');
-        const result = await callWxCloudFunction<{ recordId?: string; imageBase64?: string; codeVersion?: number }>(
-            'getPerformanceShareCode', { recordId });
+        const result = await callWxCloudFunction<{ recordId?: string; imageBase64?: string; codeVersion?: number; envVersion?: string }>(
+            'getPerformanceShareCode', { recordId, envVersion });
         const image = result?.imageBase64;
-        if (result?.recordId !== recordId || result?.codeVersion !== 1 || typeof image !== 'string' ||
+        if (result?.recordId !== recordId || result?.codeVersion !== 2 || result?.envVersion !== envVersion || typeof image !== 'string' ||
             image.length > 350000 || !/^(iVBORw0KGgo|\/9j\/)[A-Za-z0-9+/]*={0,2}$/.test(image)) {
             throw new Error('小游戏码生成失败，请稍后重试');
         }

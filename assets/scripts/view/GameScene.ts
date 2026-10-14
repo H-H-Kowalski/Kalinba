@@ -9,7 +9,7 @@ import { showToast } from './SimpleToast';
 import { showBusyIndicator, showPlaybackNotice, confirmShareImageSave } from './AppearanceFeedback';
 import { PerformanceRecorder } from '../manager/PerformanceRecorder';
 import { ContentSecurityService, ContentSecurityError } from '../manager/ContentSecurityService';
-import { PerformanceCloudService } from '../manager/PerformanceCloudService';
+import { PerformanceCloudService, getPerformanceShareEnvironment, type ShareCodeEnvironment } from '../manager/PerformanceCloudService';
 import { PerformancePlayer } from '../manager/PerformancePlayer';
 import { PERFORMANCE_MAX_DURATION_MS, type PerformanceRecord } from '../manager/PerformanceTypes';
 import { AchievementCloudService } from '../manager/AchievementCloudService';
@@ -1134,7 +1134,7 @@ export class GameScene extends Component {
     }
 
     /** 微信卡片为 5:4，带小游戏码的相册图片为 3:4；失败必须停止分享。 */
-    private async createPerformanceShareImage(caption: string, customMessage: string, codeBase64?: string, posterStyle: SharePosterStyle = this.sharePosterStyle): Promise<string | undefined> {
+    private async createPerformanceShareImage(caption: string, customMessage: string, codeBase64?: string, posterStyle: SharePosterStyle = this.sharePosterStyle, codeEnvironment: ShareCodeEnvironment = 'release'): Promise<string | undefined> {
         const wxApi = getWx() as {
             createCanvas?: () => {
                 width: number;
@@ -1190,7 +1190,7 @@ export class GameScene extends Component {
                 const message = customMessage.trim().slice(0, 20) || this.buildDefaultShareMessage(caption);
 
                 if (code && art) {
-                    drawSharePoster(ctx, art.image, code.image, songTitle, message, posterStyle);
+                    drawSharePoster(ctx, art.image, code.image, songTitle, message, posterStyle, codeEnvironment);
                 } else {
                     ctx.fillStyle = '#F5EEDC';
                     ctx.fillRect(0, 0, 600, canvas.height);
@@ -1431,20 +1431,21 @@ export class GameScene extends Component {
             // 兼容修改前生成但尚未分享的旧记录：分享时补上当前歌曲名/祝福语。
             const recordToShare: PerformanceRecord = { ...rec, title: caption };
             if (target === 'image') {
+                const codeEnvironment = getPerformanceShareEnvironment();
                 const cached = this.imageExportRecord;
                 const rid = cached?.source === rec && cached.caption === caption ? cached.recordId
                     : await PerformanceCloudService.createRecord(recordToShare);
                 if (!isCurrent()) return;
                 // 保存失败后重试复用这段演奏，不能重复上传消耗创建额度。
                 this.imageExportRecord = { source: rec, caption, recordId: rid };
-                const code = await PerformanceCloudService.getShareCode(rid);
+                const code = await PerformanceCloudService.getShareCode(rid, codeEnvironment);
                 if (!isCurrent()) return;
-                const image = await this.createPerformanceShareImage(caption, customMessage, code);
+                const image = await this.createPerformanceShareImage(caption, customMessage, code, this.sharePosterStyle, codeEnvironment);
                 if (!isCurrent()) return;
                 if (!image) throw new ImageExportError('分享图片生成失败，请稍后重试');
                 this.closeShareLoading?.(); this.closeShareLoading = null;
                 const confirmation = confirmShareImageSave(this.node, image, this.sharePosterStyle,
-                    style => this.createPerformanceShareImage(caption, customMessage, code, style), isCurrent);
+                    style => this.createPerformanceShareImage(caption, customMessage, code, style, codeEnvironment), isCurrent, codeEnvironment);
                 this.cancelImageExport = confirmation.cancel;
                 const confirmed = await confirmation.promise;
                 if (!confirmed || !isCurrent()) return;

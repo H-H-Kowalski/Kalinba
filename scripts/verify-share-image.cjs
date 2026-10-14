@@ -59,33 +59,52 @@ async function decodeCases(){
 }
 
 async function cloudCases(){
-    let reply;const service=load('assets/scripts/manager/PerformanceCloudService.ts',id=>id==='cc'?cc
-        :id.endsWith('WeChatCloudFunction')?{callWxCloudFunction:async(name,data)=>{assert.equal(name,'getPerformanceShareCode');assert.equal(data.recordId,'song1');return reply;}}:empty).PerformanceCloudService;
-    reply={recordId:'song1',codeVersion:1,imageBase64:png};assert.equal(await service.getShareCode('song1'),png);
-    for(const value of [{...reply,recordId:'other'},{...reply,codeVersion:0},{...reply,imageBase64:'error JSON'},{...reply,imageBase64:'iVBORw0KGgo'+'A'.repeat(350000)}]){
+    let reply,expectedEnvironment='release',account={miniProgram:{envVersion:'develop'}};
+    const module=load('assets/scripts/manager/PerformanceCloudService.ts',id=>id==='cc'?cc
+        :id.endsWith('WeChatNative')?{getWx:()=>({getAccountInfoSync:()=>account})}
+        :id.endsWith('WeChatCloudFunction')?{callWxCloudFunction:async(name,data)=>{assert.equal(name,'getPerformanceShareCode');assert.equal(data.recordId,'song1');assert.equal(data.envVersion,expectedEnvironment);return reply;}}:empty);
+    const service=module.PerformanceCloudService;
+    for(const env of ['release','trial','develop']){account={miniProgram:{envVersion:env}};assert.equal(module.getPerformanceShareEnvironment(),env);}
+    for(const value of [{},{miniProgram:{envVersion:'unknown'}},undefined]){account=value;assert.throws(()=>module.getPerformanceShareEnvironment(),/无法确认/);}
+    reply={recordId:'song1',codeVersion:2,envVersion:'release',imageBase64:png};assert.equal(await service.getShareCode('song1'),png);
+    for(const value of [{...reply,recordId:'other'},{...reply,codeVersion:1},{...reply,envVersion:'develop'},
+        {...reply,imageBase64:'error JSON'},{...reply,imageBase64:'iVBORw0KGgo'+'A'.repeat(350000)}]){
         reply=value;await assert.rejects(service.getShareCode('song1'),/生成失败/);
     }
-    await assert.rejects(service.getShareCode('x'.repeat(29)),/编号无效/);
+    expectedEnvironment='develop';reply={recordId:'song1',codeVersion:2,envVersion:'develop',imageBase64:png};assert.equal(await service.getShareCode('song1','develop'),png);
+    reply={...reply,envVersion:'release'};await assert.rejects(service.getShareCode('song1','develop'),/生成失败/);
+    await assert.rejects(service.getShareCode('song1','arbitrary'),/版本无效/);await assert.rejects(service.getShareCode('x'.repeat(29)),/编号无效/);
     const source=fs.readFileSync('cloudfunctions/getPerformanceShareCode/index.js','utf8');
-    let row,openid='owner',calls=0,updated=0,recent=0,apiResult={buffer:Buffer.from(png,'base64')};
+    let row,openid='owner',calls=0,updated=0,recent=0,apiResult={buffer:Buffer.from(png,'base64')},apiEnvironment='release';
     const cloud={DYNAMIC_CURRENT_ENV:'env',init:noop,getWXContext:()=>({OPENID:openid}),
         database:()=>({command:{gte:noop},collection:()=>({where:query=>({limit:()=>({get:async()=>({data:row&&query.ownerOpenId===row.ownerOpenId?[row]:[]})}),count:async()=>({total:recent})}),
             doc:()=>({update:async({data})=>{updated++;Object.assign(row,data);}})})}),
-        openapi:{wxacode:{getUnlimited:async options=>{calls++;assert.equal(options.scene,'rid=song1');assert.equal(options.width,430);assert.equal(options.envVersion,'release');assert.equal(options.page,undefined);return apiResult;}}}};
+        openapi:{wxacode:{getUnlimited:async options=>{calls++;assert.equal(options.scene,'rid=song1');assert.equal(options.width,430);assert.equal(options.envVersion,apiEnvironment);assert.equal(options.page,undefined);return apiResult;}}}};
     const exports={};vm.runInNewContext(source,{require:()=>cloud,exports,Buffer,Date,console});
     const validRow=()=>({_id:'db1',recordId:'song1',ownerOpenId:'owner',contentSecurityVersion:1,expireAtMs:Date.now()+900000});
-    row=validRow();let result=await exports.main({recordId:'song1'});assert.equal(result.imageBase64,png);assert.equal(calls,1);assert.equal(updated,2);
-    await exports.main({recordId:'song1'});assert.equal(calls,1,'cached code does not spend another official API call');
-    openid='other';await assert.rejects(exports.main({recordId:'song1'}),/unavailable/);assert.equal(calls,1);
+    row=validRow();let result=await exports.main({recordId:'song1'});assert.equal(result.imageBase64,png);assert.equal(result.codeVersion,1);assert.equal(calls,1);assert.equal(updated,2);
+    assert.equal(row.shareCodeVersion,2);assert.equal(row.shareCodeEnvVersion,'release');
+    result=await exports.main({recordId:'song1',envVersion:'release'});assert.equal(result.codeVersion,2);assert.equal(result.envVersion,'release');assert.equal(calls,1,'same-environment cache avoids extra official calls');
+    row.shareCodeRequestedAtMs=0;apiEnvironment='develop';result=await exports.main({recordId:'song1',envVersion:'develop'});
+    assert.equal(calls,2,'a release code cannot be reused as a development code');assert.equal(result.envVersion,'develop');
+    await exports.main({recordId:'song1',envVersion:'develop'});assert.equal(calls,2);
+    await assert.rejects(exports.main({recordId:'song1',envVersion:'release'}),/retry later/,'changing environments cannot bypass record cooldown');
+    row.shareCodeRequestedAtMs=0;apiEnvironment='trial';result=await exports.main({recordId:'song1',envVersion:'trial'});assert.equal(result.envVersion,'trial');assert.equal(calls,3);
+    row=validRow();row.shareCodeVersion=1;row.shareCodeBase64=png;result=await exports.main({recordId:'song1',envVersion:'release'});assert.equal(calls,3,'legacy cache is known to target release');
+    apiEnvironment='develop';result=await exports.main({recordId:'song1',envVersion:'develop'});assert.equal(calls,4,'legacy release cache must not silently open an old released client');
+    const safeCalls=calls;
+    for(const env of ['invalid',null,2,'RELEASE'])await assert.rejects(exports.main({recordId:'song1',envVersion:env}),/envVersion/);
+    assert.equal(calls,safeCalls);
+    openid='other';await assert.rejects(exports.main({recordId:'song1'}),/unavailable/);assert.equal(calls,safeCalls);
     openid='';await assert.rejects(exports.main({recordId:'song1'}),/OPENID/);openid='owner';
     row=validRow();row.contentSecurityVersion=0;await assert.rejects(exports.main({recordId:'song1'}),/reviewed/);
     row=validRow();row.expireAtMs=Date.now()-1;await assert.rejects(exports.main({recordId:'song1'}),/unavailable/);
     row=validRow();row.shareCodeRequestedAtMs=Date.now();await assert.rejects(exports.main({recordId:'song1'}),/retry later/);
     row=validRow();recent=5;await assert.rejects(exports.main({recordId:'song1'}),/too many/);recent=0;
-    row=validRow();apiResult={buffer:Buffer.from('{"errcode":40001}')};await assert.rejects(exports.main({recordId:'song1'}),/invalid code/);
+    row=validRow();apiEnvironment='release';apiResult={buffer:Buffer.from('{"errcode":40001}')};await assert.rejects(exports.main({recordId:'song1'}),/invalid code/);
     assert.equal(row.shareCodeVersion,undefined,'official errors cannot become a cached QR image');
     assert.deepEqual(JSON.parse(fs.readFileSync('cloudfunctions/getPerformanceShareCode/config.json')).permissions.openapi,['wxacode.getUnlimited']);
-    console.log('PASS cloud boundary: real OPENID/ownership, reviewed live records, cache, quota, release code, binary errors and scoped OpenAPI permission');
+    console.log('PASS cloud boundary: actual client environment, release/trial/develop cache isolation, legacy migration, mixed-deployment refusal, ownership, quota and binary failures');
 }
 
 function entryCases(){
@@ -106,15 +125,15 @@ async function flowCases(){
     const Game=load('assets/scripts/view/GameScene.ts',id=>id==='cc'?cc
         :id.endsWith('WeChatNative')?{getWx:()=>({})}
         :id.endsWith('ContentSecurityService')?{...security,ContentSecurityService:{requireText:()=>approval.promise}}
-        :id.endsWith('PerformanceCloudService')?{PerformanceCloudService:{createRecord:()=>{uploads++;return upload.promise;},getShareCode:()=>{codes++;return code.promise;}}}
+        :id.endsWith('PerformanceCloudService')?{getPerformanceShareEnvironment:()=> 'develop',PerformanceCloudService:{createRecord:()=>{uploads++;return upload.promise;},getShareCode:(_rid,env)=>{assert.equal(env,'develop');codes++;return code.promise;}}}
         :id.endsWith('PerformanceImageExport')?{ImageExportError:Error,saveShareImageToAlbum:(path,isCurrent)=>{assert.equal(path,card);assert.equal(isCurrent(),true);saves++;return {promise:saved.promise,cancel:()=>{cancelled++;saved.reject(Error('cancel'));}};}}
         :id.endsWith('AppearanceFeedback')?{showBusyIndicator:()=>{loading++;return {close:()=>loading--,update:noop}},
-            confirmShareImageSave:(_node,path,style,render,current)=>{assert.equal(path,card);assert.equal(current(),true);renderPreview=render;return {promise:confirmation.promise,cancel:()=>confirmation.resolve(null)};}}
+            confirmShareImageSave:(_node,path,style,render,current,env)=>{assert.equal(env,'develop');assert.equal(path,card);assert.equal(current(),true);renderPreview=render;return {promise:confirmation.promise,cancel:()=>confirmation.resolve(null)};}}
         :id.endsWith('PerformanceSharePoster')?{DEFAULT_SHARE_POSTER_STYLE:{color:'cream',art:'cover'}}
         :id.endsWith('SimpleToast')?{showToast:(_,text)=>notices.push(text)}
         :id.endsWith('PerformancePlayer')?{PerformancePlayer:{stop:noop}}:empty).GameScene;
     const scene=new Game();scene.lastRecord={title:'歌名',durationMs:100,events:[{t:0,k:8}]};scene.canShareRecordedResult=true;
-    scene.promptPerformanceShareMessage=async()=> '送你一首歌';scene.createPerformanceShareImage=async(_a,_b,b64)=>{assert.equal(b64,png);return card;};
+    scene.promptPerformanceShareMessage=async()=> '送你一首歌';scene.createPerformanceShareImage=async(_a,_b,b64,_style,env)=>{assert.equal(b64,png);assert.equal(env,'develop');return card;};
     let request=scene.onShareRecordClick('image');await tick();await scene.onShareRecordClick('image');assert.equal(uploads,0);
     approval.resolve();await tick();assert.equal(uploads,1);assert.equal(codes,0);upload.resolve('song1');await tick();assert.equal(codes,1);assert.equal(saves,0);
     code.resolve(png);await tick();assert.equal(saves,0,'opening a preview never saves to album');
@@ -149,6 +168,10 @@ async function cardCases(){
     assert.ok(texts.includes('微信扫码听演奏'));assert.ok(texts.includes('演奏保留90天'));options.success({tempFilePath:'poster.jpg'});
     assert.equal(await action,'poster.jpg');assert.equal(disposed,1);
     action=scene.createPerformanceShareImage('歌名','送你一首歌',png);await tick();time.fire(10000);assert.equal(await action,undefined);assert.equal(disposed,2);
+    texts.length=0;action=scene.createPerformanceShareImage('歌名','送你一首歌',png,{color:'cream',art:'cover'},'trial');await tick();
+    assert.ok(texts.some(text=>text.includes('体验版测试码')));options.success({tempFilePath:'trial.jpg'});await action;
+    texts.length=0;action=scene.createPerformanceShareImage('歌名','送你一首歌',png);await tick();
+    assert.equal(texts.some(text=>text.includes('测试码')),false);options.success({tempFilePath:'release.jpg'});await action;
     action=scene.createPerformanceShareImage('歌名','送你一首歌');assert.equal(canvas.height,480);options.success({tempFilePath:'friend.jpg'});assert.equal(await action,'friend.jpg');
     console.log('PASS generated card: 3:4 QR poster, expiry copy, decoder retained until export, failure cleanup and existing 5:4 friend card');
 }

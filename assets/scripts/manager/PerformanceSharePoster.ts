@@ -1,5 +1,6 @@
 import { assetManager, type ImageAsset } from 'cc';
 import { ImageExportError } from './PerformanceImageExport';
+import type { ShareCodeEnvironment } from './PerformanceCloudService';
 
 export type SharePosterColor = 'cream' | 'peach' | 'sage' | 'night';
 export type SharePosterArt = 'cover' | 'garden';
@@ -44,7 +45,7 @@ export function loadSharePosterArt(art: SharePosterArt): Promise<{ image: Canvas
 
 /** 3:4 相册海报；小游戏码保留白底、完整比例和独立留白。 */
 export function drawSharePoster(ctx: CanvasRenderingContext2D, art: CanvasImageSource, code: CanvasImageSource,
-    songTitle: string, message: string, style: SharePosterStyle): void {
+    songTitle: string, message: string, style: SharePosterStyle, environment: ShareCodeEnvironment = 'release'): void {
     const palette = SHARE_POSTER_COLORS.find(value => value.id === style.color) ?? SHARE_POSTER_COLORS[0];
     ctx.fillStyle = palette.background; ctx.fillRect(0, 0, 900, 1200);
     // 两款插画均使用原图完整比例，避免截断琴键或游戏标题。
@@ -68,4 +69,8 @@ export function drawSharePoster(ctx: CanvasRenderingContext2D, art: CanvasImageS
     ctx.fillText('微信扫码听演奏', 355, 973, 470);
     ctx.fillStyle = palette.muted; ctx.font = '23px sans-serif';
     ctx.fillText('演奏保留90天', 355, 1023, 470);
+    if (environment !== 'release') {
+        ctx.font = '20px sans-serif';
+        ctx.fillText(`${environment === 'develop' ? '开发版' : '体验版'}测试码 · 需有测试权限`, 355, 1066, 470);
+    }
 }

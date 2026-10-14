@@ -3,6 +3,7 @@ import type { BuiltInBackground } from '../manager/PerformanceAppearanceStore';
 import { getWx } from '../manager/WeChatNative';
 import { ImageExportError } from '../manager/PerformanceImageExport';
 import { SHARE_POSTER_COLORS, SHARE_POSTER_ART, type SharePosterStyle } from '../manager/PerformanceSharePoster';
+import type { ShareCodeEnvironment } from '../manager/PerformanceCloudService';
 
 function canvasFor(owner: Node): Node {
     return owner.scene?.getChildByName('Canvas') ?? owner;
@@ -92,7 +93,7 @@ export function showPlaybackNotice(owner: Node, stop: () => void): () => void {
 
 /** 预览和换样式都不会写入相册，只有用户明确点保存才交回最终图片。 */
 export function confirmShareImageSave(owner: Node, initialPath: string, initialStyle: SharePosterStyle,
-    render: (style: SharePosterStyle) => Promise<string | undefined>, isCurrent: () => boolean): {
+    render: (style: SharePosterStyle) => Promise<string | undefined>, isCurrent: () => boolean, environment: ShareCodeEnvironment = 'release'): {
         promise: Promise<{ filePath: string; style: SharePosterStyle } | null>; cancel(): void
     } {
     let cancel = () => {};
@@ -105,13 +106,21 @@ export function confirmShareImageSave(owner: Node, initialPath: string, initialS
         const shade = root.addComponent(Graphics); shade.fillColor = new Color(35, 25, 16, 175);
         shade.rect(-(size?.width ?? 1280) / 2, -(size?.height ?? 720) / 2, size?.width ?? 1280, size?.height ?? 720); shade.fill();
         const card = panel(root, 'Panel', 960, 600);
-        label(card, '分享图片', 255, 880, 30);
+        const title = label(card, '分享图片', 255, 880, 30);
+        title.color = new Color(75, 48, 36, 255); title.isBold = true;
         const imageNode = new Node('PosterPreview'); imageNode.layer = card.layer; imageNode.setParent(card);
         imageNode.setPosition(-270, -5); imageNode.addComponent(UITransform).setContentSize(330, 440);
         const sprite = imageNode.addComponent(Sprite); sprite.sizeMode = Sprite.SizeMode.CUSTOM;
         const status = label(card, '正在加载预览…', -255, 390, 18); status.node.setPosition(-270, -255);
-        const heading = (text: string, y: number) => { const value = label(card, text, y, 390, 22); value.node.setPosition(200, y); };
-        heading('背景色', 182); heading('拇指琴图案', 3); heading('样式仅在本次游戏中保留', -101);
+        status.color = new Color(143, 122, 101, 255);
+        const heading = (text: string, y: number) => {
+            const value = label(card, text, y, 390, 22); value.node.setPosition(200, y);
+            value.color = new Color(78, 50, 33, 255); value.isBold = true;
+        };
+        heading('背景色', 182); heading('拇指琴图案', 3);
+        const hint = label(card, environment === 'release' ? '样式仅在本次游戏中保留'
+            : `${environment === 'develop' ? '开发版' : '体验版'}测试码，需有测试权限`, -101, 390, 16);
+        hint.node.setPosition(200, -101); hint.color = new Color(150, 127, 103, 255);
         let done = false, revision = 0, busy = true;
         let filePath = initialPath, style = { ...initialStyle };
         let texture: Texture2D | undefined, frame: SpriteFrame | undefined, image: ImageAsset | undefined;
@@ -140,11 +149,15 @@ export function confirmShareImageSave(owner: Node, initialPath: string, initialS
         const current = () => { if (done) return false; if (!isCurrent()) { cancel(); return false; } return true; };
         const updateControls = () => {
             controls.forEach(control => control.interactable = !busy);
-            selectedLabels.forEach(item => item.value.string = `${item.matches() ? '✓ ' : ''}${item.text}`);
+            selectedLabels.forEach(item => {
+                const selected = item.matches(); item.value.string = `${selected ? '✓ ' : ''}${item.text}`;
+                item.value.isBold = selected;
+            });
         };
         const button = (name: string, text: string, x: number, y: number, action: () => void, width = 180, tracked = true) => {
             const node = panel(card, name, width, 56); node.setPosition(x, y);
             const value = label(node, text, 0, width - 12, 20);
+            value.color = new Color(123, 85, 56, 255);
             const control = node.addComponent(Button); control.transition = Button.Transition.SCALE;
             if (tracked) controls.push(control);
             node.on(Button.EventType.CLICK, () => { if (current() && control.interactable) action(); });
@@ -206,8 +219,13 @@ export function confirmShareImageSave(owner: Node, initialPath: string, initialS
             catch { finishPreview(true); }
         };
         button('PreviewImage', '放大预览', 100, -166, preview);
-        button('SaveImage', '保存到相册', 300, -166, () => finish(true));
-        button('Cancel', '取消', 200, -235, cancel, 380, false);
+        const save = button('SaveImage', '保存到相册', 300, -166, () => finish(true));
+        const saveBackground = save.control.node.getComponent(Graphics)!;
+        saveBackground.fillColor = new Color(174, 91, 40, 255);
+        saveBackground.roundRect(-90, -28, 180, 56, 18); saveBackground.fill();
+        save.value.color = new Color(255, 249, 235, 255); save.value.isBold = true;
+        const dismiss = button('Cancel', '取消', 200, -235, cancel, 380, false);
+        dismiss.value.fontSize = 18; dismiss.value.color = new Color(147, 129, 111, 255);
         imageNode.on(Node.EventType.TOUCH_END, preview);
         updateControls(); display(initialPath, style, ++revision);
     });
