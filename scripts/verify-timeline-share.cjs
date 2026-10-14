@@ -149,7 +149,7 @@ function resultCardCases() {
     }
     buttons.find(button=>button.text==='分享到朋友圈').action();assert.equal(timeline,1);assert.equal(friend,0);assert.equal(closed,1);
     buttons.find(button=>button.text==='分享给好友').action();assert.equal(friend,1);
-    buttons.find(button=>button.text==='保存分享图片').action();assert.equal(saved,1);assert.equal(friend,1);assert.equal(timeline,1);
+    buttons.find(button=>button.text==='预览分享图片').action();assert.equal(saved,1);assert.equal(friend,1);assert.equal(timeline,1);
     console.log('PASS result card: separate friend/timeline/image actions and five buttons fit without overlapping');
 }
 (async()=>{menuCases();await flowCases();entryCases();resultCardCases();})().catch(error=>{console.error(error);process.exitCode=1;});

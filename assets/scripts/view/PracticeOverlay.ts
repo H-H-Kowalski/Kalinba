@@ -282,7 +282,7 @@ export class PracticeOverlay extends Component {
             this.hideRecordingFlow();
             actions.onShareTimeline();
         });
-        this.makePanelButton(panel, 'SaveShareImage', '保存分享图片', 0, -184, new Color(105, 84, 59, 255), new Color(255, 246, 220, 255), () => {
+        this.makePanelButton(panel, 'SaveShareImage', '预览分享图片', 0, -184, new Color(105, 84, 59, 255), new Color(255, 246, 220, 255), () => {
             this.hideRecordingFlow();
             actions.onSaveImage();
         });

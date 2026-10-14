@@ -101,44 +101,51 @@ function entryCases(){
 }
 
 async function flowCases(){
-    let approval=deferred(),upload=deferred(),code=deferred(),saved=deferred(),uploads=0,codes=0,saves=0,loading=0,cancelled=0,card='poster.jpg';const notices=[];
+    let approval=deferred(),upload=deferred(),code=deferred(),saved=deferred(),uploads=0,codes=0,saves=0,loading=0,cancelled=0,confirmation=deferred(),renderPreview,card='poster.jpg';const notices=[];
     const security=load('assets/scripts/manager/ContentSecurityService.ts',id=>id==='cc'?cc:empty);
     const Game=load('assets/scripts/view/GameScene.ts',id=>id==='cc'?cc
         :id.endsWith('WeChatNative')?{getWx:()=>({})}
         :id.endsWith('ContentSecurityService')?{...security,ContentSecurityService:{requireText:()=>approval.promise}}
         :id.endsWith('PerformanceCloudService')?{PerformanceCloudService:{createRecord:()=>{uploads++;return upload.promise;},getShareCode:()=>{codes++;return code.promise;}}}
         :id.endsWith('PerformanceImageExport')?{ImageExportError:Error,saveShareImageToAlbum:(path,isCurrent)=>{assert.equal(path,card);assert.equal(isCurrent(),true);saves++;return {promise:saved.promise,cancel:()=>{cancelled++;saved.reject(Error('cancel'));}};}}
-        :id.endsWith('AppearanceFeedback')?{showBusyIndicator:()=>{loading++;return {close:()=>loading--,update:noop}}}
+        :id.endsWith('AppearanceFeedback')?{showBusyIndicator:()=>{loading++;return {close:()=>loading--,update:noop}},
+            confirmShareImageSave:(_node,path,style,render,current)=>{assert.equal(path,card);assert.equal(current(),true);renderPreview=render;return {promise:confirmation.promise,cancel:()=>confirmation.resolve(null)};}}
+        :id.endsWith('PerformanceSharePoster')?{DEFAULT_SHARE_POSTER_STYLE:{color:'cream',art:'cover'}}
         :id.endsWith('SimpleToast')?{showToast:(_,text)=>notices.push(text)}
         :id.endsWith('PerformancePlayer')?{PerformancePlayer:{stop:noop}}:empty).GameScene;
     const scene=new Game();scene.lastRecord={title:'歌名',durationMs:100,events:[{t:0,k:8}]};scene.canShareRecordedResult=true;
     scene.promptPerformanceShareMessage=async()=> '送你一首歌';scene.createPerformanceShareImage=async(_a,_b,b64)=>{assert.equal(b64,png);return card;};
     let request=scene.onShareRecordClick('image');await tick();await scene.onShareRecordClick('image');assert.equal(uploads,0);
     approval.resolve();await tick();assert.equal(uploads,1);assert.equal(codes,0);upload.resolve('song1');await tick();assert.equal(codes,1);assert.equal(saves,0);
-    code.resolve(png);await tick();assert.equal(saves,1);assert.equal(notices.length,0,'calling save is not proof it succeeded');
+    code.resolve(png);await tick();assert.equal(saves,0,'opening a preview never saves to album');
+    assert.equal(loading,0,'generation loading ends before user chooses styles');
+    await renderPreview({color:'sage',art:'garden'});assert.equal(uploads,1);assert.equal(codes,1,'styles reuse the same code and reviewed text');
+    confirmation.resolve({filePath:card,style:{color:'sage',art:'garden'}});await tick();assert.equal(saves,1);assert.equal(notices.length,0,'calling save is not proof it succeeded');
     saved.resolve();await request;assert.match(notices.pop(),/已保存到相册/);assert.equal(loading,0);assert.equal(scene.shareBusy,false);
-    approval=deferred();code=deferred();saved=deferred();request=scene.onShareRecordClick('image');await tick();approval.resolve();await tick();
-    assert.equal(uploads,1,'retry same recording reuses cloud record');code.resolve(png);await tick();saved.reject(Error('failure'));await request;
+    approval=deferred();code=deferred();saved=deferred();confirmation=deferred();request=scene.onShareRecordClick('image');await tick();approval.resolve();await tick();
+    assert.equal(uploads,1,'retry same recording reuses cloud record');code.resolve(png);await tick();confirmation.resolve({filePath:card,style:{color:'sage',art:'garden'}});await tick();saved.reject(Error('failure'));await request;
     assert.equal(notices.some(text=>/已保存/.test(text)),false);notices.length=0;
-    approval=deferred();code=deferred();saved=deferred();request=scene.onShareRecordClick('image');await tick();approval.resolve();await tick();code.resolve(png);await tick();
+    approval=deferred();code=deferred();saved=deferred();confirmation=deferred();request=scene.onShareRecordClick('image');await tick();approval.resolve();await tick();code.resolve(png);await tick();confirmation.resolve({filePath:card,style:{color:'sage',art:'garden'}});await tick();
     scene.onDisable();await request;assert.equal(cancelled,1);assert.equal(loading,0);assert.equal(notices.length,0,'late save cannot notify a different page');
     scene.sceneActive=true;approval=deferred();request=scene.onShareRecordClick('image');await tick();approval.reject(new security.ContentSecurityError(true));await request;
     assert.equal(uploads,1);assert.match(notices.pop(),/不符合规范/);
     approval=deferred();code=deferred();request=scene.onShareRecordClick('image');await tick();approval.resolve();await tick();const before=saves;scene.onDisable();code.resolve(png);await request;
     assert.equal(saves,before,'leaving before QR response cannot open the album');assert.equal(loading,0);
-    console.log('PASS image flow: review -> record -> QR -> card -> album, dedup/retry, refusal, loading cleanup and scene cancellation');
+    console.log('PASS image flow: review -> record -> QR -> preview -> explicit save -> album, dedup/retry, refusal, loading cleanup and scene cancellation');
 }
 
 async function cardCases(){
     const time=clock();let canvas,options,disposed=0;const drawn=[],texts=[];
     const context=new Proxy({drawImage:(...args)=>drawn.push(args),fillText:text=>texts.push(text)},{get:(o,k)=>o[k]??noop,set:(o,k,v)=>(o[k]=v,true)});
     const api={createCanvas:()=>{canvas={getContext:()=>context,toTempFilePath:o=>options=o};return canvas;}};
-    const codeImage={};const Game=load('assets/scripts/view/GameScene.ts',id=>id==='cc'?cc
+    const codeImage={},artImage={};const poster=load('assets/scripts/manager/PerformanceSharePoster.ts',()=>cc);const Game=load('assets/scripts/view/GameScene.ts',id=>id==='cc'?cc
         :id.endsWith('WeChatNative')?{getWx:()=>api}
-        :id.endsWith('PerformanceImageExport')?{loadShareCodeImage:async()=>({image:codeImage,dispose:()=>disposed++})}:empty,time).GameScene;
+        :id.endsWith('PerformanceImageExport')?{loadShareCodeImage:async()=>({image:codeImage,dispose:()=>disposed++})}
+        :id.endsWith('PerformanceSharePoster')?{...poster,loadSharePosterArt:async()=>({image:artImage,dispose:noop})}:empty,time).GameScene;
     const scene=new Game();let action=scene.createPerformanceShareImage('歌名','送你一首歌',png);await tick();
-    assert.equal(canvas.width,600);assert.equal(canvas.height,800);assert.equal(options.destHeight,800);
-    assert.equal(drawn[0][0],codeImage);assert.deepEqual(drawn[0].slice(1),[185,499,230,230]);assert.equal(disposed,0);
+    assert.equal(canvas.width,900);assert.equal(canvas.height,1200);assert.equal(options.destHeight,1200);
+    assert.equal(drawn[0][0],artImage);assert.deepEqual(drawn[0].slice(1),[0,0,900,600]);
+    assert.equal(drawn[1][0],codeImage);assert.deepEqual(drawn[1].slice(1),[82,902,220,220]);assert.equal(disposed,0);
     assert.ok(texts.includes('微信扫码听演奏'));assert.ok(texts.includes('演奏保留90天'));options.success({tempFilePath:'poster.jpg'});
     assert.equal(await action,'poster.jpg');assert.equal(disposed,1);
     action=scene.createPerformanceShareImage('歌名','送你一首歌',png);await tick();time.fire(10000);assert.equal(await action,undefined);assert.equal(disposed,2);

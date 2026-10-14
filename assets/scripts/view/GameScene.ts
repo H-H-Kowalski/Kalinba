@@ -6,7 +6,7 @@ import { applySavedFontToSubtree } from '../manager/GlobalFontApplier';
 import { SceneManager } from '../manager/SceneManager';
 import { SheetMusicBackground } from './SheetMusicBackground';
 import { showToast } from './SimpleToast';
-import { showBusyIndicator, showPlaybackNotice } from './AppearanceFeedback';
+import { showBusyIndicator, showPlaybackNotice, confirmShareImageSave } from './AppearanceFeedback';
 import { PerformanceRecorder } from '../manager/PerformanceRecorder';
 import { ContentSecurityService, ContentSecurityError } from '../manager/ContentSecurityService';
 import { PerformanceCloudService } from '../manager/PerformanceCloudService';
@@ -16,6 +16,7 @@ import { AchievementCloudService } from '../manager/AchievementCloudService';
 import { installShareLaunchCapture, onPendingGameLaunch, takePendingSharedRecordId } from '../manager/PerformanceShareLaunch';
 import { getWx } from '../manager/WeChatNative';
 import { ImageExportError, loadShareCodeImage, saveShareImageToAlbum } from '../manager/PerformanceImageExport';
+import { DEFAULT_SHARE_POSTER_STYLE, drawSharePoster, loadSharePosterArt, type SharePosterStyle } from '../manager/PerformanceSharePoster';
 import { LevelProgressStore } from '../manager/LevelProgressStore';
 import { ChallengeLaunchStore } from '../manager/ChallengeLaunchStore';
 import { MetronomeController } from '../manager/MetronomeController';
@@ -108,6 +109,7 @@ export class GameScene extends Component {
     private closeSharedFeedback: (() => void) | null = null;
     private closeShareLoading: (() => void) | null = null;
     private cancelImageExport: (() => void) | null = null;
+    private sharePosterStyle: SharePosterStyle = { ...DEFAULT_SHARE_POSTER_STYLE };
     private imageExportRecord: { source: PerformanceRecord; caption: string; recordId: string } | null = null;
     private playbackInputBlocker: BlockInputEvents | null = null;
     private lastChallengeLevelId = 'c1-01';
@@ -1132,7 +1134,7 @@ export class GameScene extends Component {
     }
 
     /** 微信卡片为 5:4，带小游戏码的相册图片为 3:4；失败必须停止分享。 */
-    private async createPerformanceShareImage(caption: string, customMessage: string, codeBase64?: string): Promise<string | undefined> {
+    private async createPerformanceShareImage(caption: string, customMessage: string, codeBase64?: string, posterStyle: SharePosterStyle = this.sharePosterStyle): Promise<string | undefined> {
         const wxApi = getWx() as {
             createCanvas?: () => {
                 width: number;
@@ -1149,7 +1151,10 @@ export class GameScene extends Component {
         } | undefined;
         if (!wxApi?.createCanvas) return Promise.resolve(undefined);
         const code = codeBase64 ? await loadShareCodeImage(codeBase64) : undefined;
-        try { return await new Promise<string | undefined>((resolve) => {
+        let art: Awaited<ReturnType<typeof loadSharePosterArt>> | undefined;
+        try {
+            if (code) art = await loadSharePosterArt(posterStyle.art);
+            return await new Promise<string | undefined>((resolve) => {
             let settled = false;
             const finish = (value?: string) => {
                 if (settled) return;
@@ -1160,8 +1165,8 @@ export class GameScene extends Component {
             const timer = setTimeout(() => finish(), 10000);
             try {
                 const canvas = wxApi.createCanvas!();
-                canvas.width = 600;
-                canvas.height = code ? 800 : 480;
+                canvas.width = code ? 900 : 600;
+                canvas.height = code ? 1200 : 480;
                 const ctx = canvas.getContext('2d');
                 if (!ctx || !canvas.toTempFilePath) {
                     finish();
@@ -1184,65 +1189,57 @@ export class GameScene extends Component {
                 const songTitle = this.getShareSongTitle(caption);
                 const message = customMessage.trim().slice(0, 20) || this.buildDefaultShareMessage(caption);
 
-                ctx.fillStyle = '#F5EEDC';
-                ctx.fillRect(0, 0, 600, canvas.height);
-                ctx.fillStyle = '#E9DDBF';
-                ctx.fillRect(0, 0, 18, canvas.height);
-                ctx.fillStyle = '#6D452C';
-                ctx.font = '20px sans-serif';
-                ctx.textAlign = 'left';
-                ctx.textBaseline = 'middle';
-                ctx.fillText('拇指琴演奏家', 48, 54);
-                ctx.fillStyle = '#B98B55';
-                ctx.fillRect(48, 82, 504, 2);
-
-                ctx.fillStyle = '#4C3425';
-                const messageLines = message.length > 12
-                    ? [message.slice(0, 12), message.slice(12)]
-                    : [message];
-                ctx.font = `${messageLines.length > 1 ? 34 : 40}px sans-serif`;
-                messageLines.forEach((line, index) => ctx.fillText(line, 48, messageLines.length > 1 ? 130 + index * 44 : 145, 500));
-                ctx.fillStyle = '#94653F';
-                ctx.font = '27px sans-serif';
-                ctx.fillText(songTitle, 48, messageLines.length > 1 ? 222 : 205, 470);
-
-                // 简洁木质拇指琴图形，保持阅读类分享卡的留白感。
-                ctx.fillStyle = '#B86B32';
-                roundRect(338, 278, 190, 154, 22);
-                ctx.fill();
-                ctx.strokeStyle = '#704027';
-                ctx.lineWidth = 4;
-                ctx.stroke();
-                ctx.fillStyle = '#7D472B';
-                ctx.beginPath();
-                ctx.arc(433, 382, 22, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.strokeStyle = '#E7E0D3';
-                ctx.lineWidth = 9;
-                ctx.lineCap = 'round';
-                for (let i = 0; i < 9; i++) {
-                    const x = 365 + i * 17;
-                    const length = 70 + (4 - Math.abs(4 - i)) * 8;
-                    ctx.beginPath();
-                    ctx.moveTo(x, 300);
-                    ctx.lineTo(x, 300 + length);
-                    ctx.stroke();
-                }
-                if (code) {
-                    // 保留白色码底和充足边距，禁止在码上覆盖图形或用户文案。
-                    ctx.fillStyle = '#FFFFFF';
-                    ctx.fillRect(174, 488, 252, 252);
-                    ctx.drawImage(code.image, 185, 499, 230, 230);
-                    ctx.textAlign = 'center';
+                if (code && art) {
+                    drawSharePoster(ctx, art.image, code.image, songTitle, message, posterStyle);
+                } else {
+                    ctx.fillStyle = '#F5EEDC';
+                    ctx.fillRect(0, 0, 600, canvas.height);
+                    ctx.fillStyle = '#E9DDBF';
+                    ctx.fillRect(0, 0, 18, canvas.height);
                     ctx.fillStyle = '#6D452C';
-                    ctx.font = '22px sans-serif';
-                    ctx.fillText('微信扫码听演奏', 300, 757);
-                    ctx.font = '16px sans-serif';
-                    ctx.fillText('演奏保留90天', 300, 785);
+                    ctx.font = '20px sans-serif';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('拇指琴演奏家', 48, 54);
+                    ctx.fillStyle = '#B98B55';
+                    ctx.fillRect(48, 82, 504, 2);
+
+                    ctx.fillStyle = '#4C3425';
+                    const messageLines = message.length > 12
+                        ? [message.slice(0, 12), message.slice(12)]
+                        : [message];
+                    ctx.font = `${messageLines.length > 1 ? 34 : 40}px sans-serif`;
+                    messageLines.forEach((line, index) => ctx.fillText(line, 48, messageLines.length > 1 ? 130 + index * 44 : 145, 500));
+                    ctx.fillStyle = '#94653F';
+                    ctx.font = '27px sans-serif';
+                    ctx.fillText(songTitle, 48, messageLines.length > 1 ? 222 : 205, 470);
+
+                    // 简洁木质拇指琴图形，保持阅读类分享卡的留白感。
+                    ctx.fillStyle = '#B86B32';
+                    roundRect(338, 278, 190, 154, 22);
+                    ctx.fill();
+                    ctx.strokeStyle = '#704027';
+                    ctx.lineWidth = 4;
+                    ctx.stroke();
+                    ctx.fillStyle = '#7D472B';
+                    ctx.beginPath();
+                    ctx.arc(433, 382, 22, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = '#E7E0D3';
+                    ctx.lineWidth = 9;
+                    ctx.lineCap = 'round';
+                    for (let i = 0; i < 9; i++) {
+                        const x = 365 + i * 17;
+                        const length = 70 + (4 - Math.abs(4 - i)) * 8;
+                        ctx.beginPath();
+                        ctx.moveTo(x, 300);
+                        ctx.lineTo(x, 300 + length);
+                        ctx.stroke();
+                    }
                 }
                 canvas.toTempFilePath({
-                    x: 0, y: 0, width: 600, height: canvas.height,
-                    destWidth: 600, destHeight: canvas.height,
+                    x: 0, y: 0, width: canvas.width, height: canvas.height,
+                    destWidth: canvas.width, destHeight: canvas.height,
                     fileType: 'jpg', quality: 0.92,
                     success: (res) => finish(typeof res?.tempFilePath === 'string' ? res.tempFilePath : undefined),
                     fail: () => finish(),
@@ -1251,7 +1248,7 @@ export class GameScene extends Component {
                 console.warn('[ShareCard] create image failed', e);
                 finish();
             }
-        }); } finally { code?.dispose(); }
+        }); } finally { art?.dispose(); code?.dispose(); }
     }
 
     private onToggleRecordClick() {
@@ -1445,11 +1442,18 @@ export class GameScene extends Component {
                 const image = await this.createPerformanceShareImage(caption, customMessage, code);
                 if (!isCurrent()) return;
                 if (!image) throw new ImageExportError('分享图片生成失败，请稍后重试');
-                loading.update('正在保存图片，请完成相册授权…');
-                const saving = saveShareImageToAlbum(image, isCurrent);
+                this.closeShareLoading?.(); this.closeShareLoading = null;
+                const confirmation = confirmShareImageSave(this.node, image, this.sharePosterStyle,
+                    style => this.createPerformanceShareImage(caption, customMessage, code, style), isCurrent);
+                this.cancelImageExport = confirmation.cancel;
+                const confirmed = await confirmation.promise;
+                if (!confirmed || !isCurrent()) return;
+                this.sharePosterStyle = confirmed.style;
+                this.closeShareLoading = showBusyIndicator(this.node, '正在保存图片，请完成相册授权…').close;
+                const saving = saveShareImageToAlbum(confirmed.filePath, isCurrent);
                 this.cancelImageExport = saving.cancel;
                 await saving.promise;
-                if (isCurrent()) showToast(this.node, '已保存到相册，可到小红书选择图片发布', 3);
+                if (isCurrent()) showToast(this.node, '已保存到相册', 2);
                 return;
             }
             const wxApi = getWx() as {
